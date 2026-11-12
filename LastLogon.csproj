@@ -14,7 +14,6 @@
     <WindowsPackageType>None</WindowsPackageType>
     <SatelliteResourceLanguages>en</SatelliteResourceLanguages>
     <TieredPGO>false</TieredPGO>
-    <SelfContained>true</SelfContained>
   </PropertyGroup>
 
   <ItemGroup>
@@ -24,6 +23,20 @@
     <None Remove="LastLogon.Core\**;LastLogon.Tests\**" />
     <Page Remove="LastLogon.Core\**;LastLogon.Tests\**;MainWindow.xaml;LookupWindow.xaml" />
   </ItemGroup>
+
+  <!--
+    The windows10.0.19041.0 target framework pulls in the Windows SDK projections
+    (Microsoft.Windows.SDK.NET.dll, 24 MB of WinRT metadata plus WinRT.Runtime.dll). This
+    application is plain WPF and never calls a WinRT API, so the projections are removed from
+    the framework references and never end up in the build output.
+  -->
+  <Target Name="RemoveWindowsSdkFrameworkReference"
+          AfterTargets="AddWindowsSdkKnownFrameworkReferences"
+          BeforeTargets="ProcessFrameworkReferences">
+    <ItemGroup>
+      <KnownFrameworkReference Remove="Microsoft.Windows.SDK.NET.Ref" />
+    </ItemGroup>
+  </Target>
 
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />
@@ -62,10 +75,19 @@
     <HasPackageAndPublishMenu>true</HasPackageAndPublishMenu>
   </PropertyGroup>
 
-  <!-- Publish Properties -->
+  <!--
+    Publish properties.
+
+    The publish shape is decided by the profile in Properties\PublishProfiles:
+      win-$(Platform).pubxml             framework dependent, one file, needs the .NET Desktop Runtime
+      standalone-win-$(Platform).pubxml   self contained, one file, no prerequisites
+
+    ReadyToRun is off by default: it adds roughly 55 MB to the payload and only shortens the
+    start of a tool that is used a handful of times a day.
+    Trimming stays off because WPF cannot be trimmed - a trimmed build fails at run time.
+  -->
   <PropertyGroup>
-    <PublishReadyToRun Condition="'$(Configuration)' == 'Debug'">False</PublishReadyToRun>
-    <PublishReadyToRun Condition="'$(Configuration)' != 'Debug'">True</PublishReadyToRun>
+    <PublishReadyToRun>false</PublishReadyToRun>
     <PublishTrimmed>false</PublishTrimmed>
   </PropertyGroup>
 </Project>
