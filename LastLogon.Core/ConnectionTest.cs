@@ -3,8 +3,16 @@ using System.Net.Sockets;
 
 namespace LastLogon.Core;
 
-/// <summary>One attempt to reach the profile folder of a computer.</summary>
-public sealed record ConnectionAttempt(string AddressedAs, bool Succeeded, string? Message, int? Win32Error);
+/// <summary>
+/// One attempt to reach the profile folder of a computer. <paramref name="ResolvedAddress"/> is
+/// the address the name resolved to, or null when it did not resolve.
+/// </summary>
+public sealed record ConnectionAttempt(
+    string AddressedAs,
+    bool Succeeded,
+    string? Message,
+    int? Win32Error,
+    string? ResolvedAddress = null);
 
 /// <summary>
 /// The outcome of trying to reach a computer, including every way of addressing it that was
@@ -48,6 +56,38 @@ public sealed record ConnectionTestResult(
     }
 
     /// <summary>
+    /// One clause per name that was tried: the address it resolved to and whether the profile
+    /// folder could be read through it. Two names that resolve to different addresses reach
+    /// different computers, which is the first thing to rule out when a computer answers
+    /// "access denied" for a name and an account that are both correct.
+    /// </summary>
+    public string DescribeAttempts()
+    {
+        if (Attempts.Count == 0) return string.Empty;
+
+        var clauses = Attempts.Select(attempt =>
+        {
+            var outcome = attempt.Succeeded
+                ? "reachable"
+                : attempt.Win32Error is int error ? $"failed, Windows error {error}" : "failed";
+            return $"{attempt.AddressedAs} ({attempt.ResolvedAddress ?? "no address"}) {outcome}";
+        });
+        var text = "Tried: " + string.Join("; ", clauses) + ".";
+
+        // The comparison is only made when every name resolved: an address cannot be compared
+        // with none.
+        var addresses = Attempts.Select(attempt => attempt.ResolvedAddress).OfType<string>().ToList();
+        if (Attempts.Count > 1 && addresses.Count == Attempts.Count)
+        {
+            text += addresses.Distinct(StringComparer.OrdinalIgnoreCase).Count() > 1
+                ? " The names resolve to different addresses, so they reach different computers."
+                : " Both names resolve to the same address.";
+        }
+
+        return text;
+    }
+
+    /// <summary>
     /// Turns the Windows error into something an administrator can act on. The code says much
     /// more than "access denied" does: it separates a wrong name from a wrong account from a
     /// share that is not there.
@@ -75,6 +115,9 @@ public static class ConnectionTest
     /// <summary>How long a single attempt may take before it is reported as unanswered.</summary>
     private static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>How long a name may take to resolve before it is reported as having no address.</summary>
+    private static readonly TimeSpan ResolveTimeout = TimeSpan.FromSeconds(5);
+
     public static ConnectionTestResult Run(string computer, ComputerTarget.Addressing mode)
     {
         var names = InputParser.ParseComputers(computer);
@@ -86,13 +129,15 @@ public static class ConnectionTest
 
         foreach (var candidate in Candidates(computer, mode))
         {
-            var attempt = Try(candidate);
+            // Every name keeps its own address, so that two names that reach different
+            // computers can be told apart from two names that reach the same one.
+            var attempt = Try(candidate) with { ResolvedAddress = Resolve(candidate) };
             attempts.Add(attempt);
             if (attempt.Succeeded)
             {
                 return new ConnectionTestResult(
                     computer,
-                    Resolve(candidate),
+                    attempt.ResolvedAddress,
                     true,
                     candidate,
                     attempts);
@@ -104,7 +149,7 @@ public static class ConnectionTest
         var addressedAs = attempts.Count > 0 ? attempts[0].AddressedAs : computer;
         return new ConnectionTestResult(
             computer,
-            Resolve(addressedAs),
+            attempts.Count > 0 ? attempts[0].ResolvedAddress : Resolve(addressedAs),
             false,
             addressedAs,
             attempts);
@@ -152,7 +197,18 @@ public static class ConnectionTest
     {
         try
         {
-            var entry = Dns.GetHostEntry(computer);
+            // The system resolver is used, as the file sharing client does, and it is given a
+            // limited time: a name server that does not answer must not hold the report up.
+            var lookup = Task.Run(() => Dns.GetHostEntry(computer));
+            if (!lookup.Wait(ResolveTimeout))
+            {
+                _ = lookup.ContinueWith(
+                    t => { _ = t.Exception; },
+                    TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+                return null;
+            }
+
+            var entry = lookup.Result;
             var address = entry.AddressList.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)
                           ?? entry.AddressList.FirstOrDefault();
             return address?.ToString();

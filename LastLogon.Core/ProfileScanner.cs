@@ -14,8 +14,15 @@ public class ProfileScanner
     private readonly int _maxParallel;
     private readonly TimeSpan _timeout;
 
-    public ProfileScanner(IProfileFileSystem fs, int maxParallel = 8, TimeSpan? perPcTimeout = null)
+    private readonly Func<string, ConnectionTestResult>? _connectionProbe;
+
+    public ProfileScanner(
+        IProfileFileSystem fs,
+        int maxParallel = 8,
+        TimeSpan? perPcTimeout = null,
+        Func<string, ConnectionTestResult>? connectionProbe = null)
     {
+        _connectionProbe = connectionProbe;
         _fs = fs;
         _maxParallel = maxParallel;
         _timeout = perPcTimeout ?? TimeSpan.FromSeconds(10);
@@ -99,7 +106,8 @@ public class ProfileScanner
         }
         catch (Exception ex)
         {
-            return new ScanOutcome<ProfileResult>(new[] { Failure(computer, "", ex) }, pending);
+            var tried = await TryTheNamesAsync(ex, computer, ct);
+            return new ScanOutcome<ProfileResult>(new[] { Failure(computer, "", ex, tried) }, pending);
         }
     }
 
@@ -217,7 +225,44 @@ public class ProfileScanner
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
-            return new ScanOutcome<ProfileResult>(new[] { Failure(computer, username, ex) }, pending);
+            var tried = await TryTheNamesAsync(ex, computer, ct);
+            return new ScanOutcome<ProfileResult>(new[] { Failure(computer, username, ex, tried) }, pending);
+        }
+    }
+
+    /// <summary>
+    /// For a computer that answered "access denied", reports which address each way of naming it
+    /// resolves to and whether it can be read through that name. The answer of a computer says
+    /// nothing about the account when the name reaches a different computer than the one meant.
+    /// <para>
+    /// Only an access failure of the whole computer is looked into. An unreachable computer would
+    /// only add waiting to a bulk scan. Null when there is nothing to add: no probe, another kind
+    /// of failure, a probe that fails, or one that takes longer than three times the time a
+    /// computer is given. The row then stays as it was.
+    /// </para>
+    /// </summary>
+    private async Task<string?> TryTheNamesAsync(Exception failure, string computer, CancellationToken ct)
+    {
+        if (_connectionProbe is null || failure is not UnauthorizedAccessException) return null;
+
+        try
+        {
+            var probe = Task.Run(() => _connectionProbe(computer), CancellationToken.None);
+            _ = probe.ContinueWith(
+                t => { _ = t.Exception; },
+                TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
+
+            var result = await probe.WaitAsync(_timeout * 3, ct);
+            var text = result.DescribeAttempts();
+            return text.Length == 0 ? null : text;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
         }
     }
 
@@ -292,10 +337,10 @@ public class ProfileScanner
             text + " The other profiles on this computer could be read.");
     }
 
-    private static ProfileResult Failure(string computer, string user, Exception ex) => ex switch
+    private static ProfileResult Failure(string computer, string user, Exception ex, string? tried = null) => ex switch
     {
         UnauthorizedAccessException access => new(
-            computer, user, null, null, ScanStatus.AccessDenied, Describe(access, computer)),
+            computer, user, null, null, ScanStatus.AccessDenied, Describe(access, computer, tried)),
         TimeoutException => new(computer, user, null, null, ScanStatus.TimedOut, "Timed out"),
         DirectoryNotFoundException => new(computer, user, null, null, ScanStatus.Offline, "Offline or C$ unreachable"),
         IOException io => new(computer, user, null, null, ScanStatus.Offline, io.Message),
@@ -307,10 +352,14 @@ public class ProfileScanner
     /// "Access denied" on its own does not say whether the tool is filtered, the account is not
     /// an administrator on the target or the share has been turned off.
     /// </summary>
-    private static string Describe(UnauthorizedAccessException exception, string computer)
+    private static string Describe(UnauthorizedAccessException exception, string computer, string? tried = null)
     {
         var reason = exception.Message.Trim();
         var reasonText = reason.Length == 0 ? "Access denied" : "Access denied: " + reason;
+
+        // The names and addresses come straight after the reason, because the grid trims a long
+        // row and they are what tells a refused account from a wrong computer.
+        if (!string.IsNullOrEmpty(tried)) reasonText += " " + tried;
 
         var addressed = DescribeAddressing(
             computer, ComputerTarget.DnsDomain, ComputerTarget.AddressingMode);

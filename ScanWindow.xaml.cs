@@ -32,8 +32,13 @@ public partial class ScanWindow : Window
             else Dispatcher.BeginInvoke(action);
         };
 
+        // A computer that answers "access denied" is looked into with the same test as the Test
+        // connection button, using the addressing the operator selected, so that the row says
+        // which address each name reaches.
         _vm = new MainViewModel(
-            new ProfileScanner(new SmbProfileFileSystem()),
+            new ProfileScanner(
+                new SmbProfileFileSystem(),
+                connectionProbe: computer => ConnectionTest.Run(computer, ComputerTarget.AddressingMode)),
             dispatch);
         _historyVm = new LogonHistoryViewModel(
             new LogonEventScanner(new WindowsLogonEventSource()),
@@ -280,20 +285,13 @@ public partial class ScanWindow : Window
     {
         var text = result.Summary;
 
+        // With two names the report lists the address of each, which is the same text a denied
+        // scan row shows. With one name there is nothing to compare, so the address is enough.
+        if (result.Attempts.Count > 1)
+            return text + " " + result.DescribeAttempts();
+
         if (!string.IsNullOrEmpty(result.ResolvedAddress))
             text += $" Resolves to {result.ResolvedAddress}.";
-
-        if (result.Attempts.Count > 1)
-        {
-            var details = result.Attempts.Select(attempt =>
-            {
-                var code = attempt.Win32Error is int error ? $" (Windows error {error})" : string.Empty;
-                return attempt.Succeeded
-                    ? $"[{attempt.AddressedAs}: reachable]"
-                    : $"[{attempt.AddressedAs}: failed{code}]";
-            });
-            text += " " + string.Join(" ", details);
-        }
 
         return text;
     }

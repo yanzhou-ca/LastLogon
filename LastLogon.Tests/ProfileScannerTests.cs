@@ -194,6 +194,119 @@ public class ProfileScannerTests
         Assert.Equal(ScanStatus.Offline, row.Status);
     }
 
+    // "Access denied" is the answer of whichever computer replied at that name. Showing which
+    // address each name resolves to is what tells a refused account from a wrong computer.
+    private static ConnectionTestResult TwoNamesTwoComputers() => new(
+        "pc1",
+        "10.0.0.5",
+        true,
+        "pc1",
+        new[]
+        {
+            new ConnectionAttempt("pc1.corp.example", false, "denied", 5, "10.0.0.5"),
+            new ConnectionAttempt("pc1", true, "3 profile folder(s) readable.", null, "10.0.0.9"),
+        });
+
+    [Fact]
+    public async Task ScanComputer_AccessDenied_ShowsWhichAddressEachNameResolvesTo()
+    {
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("denied");
+        string? asked = null;
+        var scanner = new ProfileScanner(fs, connectionProbe: computer =>
+        {
+            asked = computer;
+            return TwoNamesTwoComputers();
+        });
+
+        var row = Assert.Single(await scanner.ScanComputerAsync("pc1", default));
+
+        Assert.Equal("pc1", asked);
+        Assert.Equal(ScanStatus.AccessDenied, row.Status);
+        Assert.Contains("pc1.corp.example (10.0.0.5) failed, Windows error 5", row.Message);
+        Assert.Contains("pc1 (10.0.0.9) reachable", row.Message);
+        Assert.Contains("different addresses", row.Message);
+        // Near the front of the row, which is trimmed in the grid, ahead of the long guidance.
+        Assert.True(row.Message!.IndexOf("Tried:", StringComparison.Ordinal)
+                    < row.Message.IndexOf("addressed", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task FindUser_AccessDenied_ShowsTheNamesToo()
+    {
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("listing is denied");
+        fs.FailNtUser = (_, _) => new UnauthorizedAccessException("file is denied");
+        var scanner = new ProfileScanner(fs, connectionProbe: _ => TwoNamesTwoComputers());
+
+        var list = new List<ProfileResult>();
+        await foreach (var r in scanner.FindUserAsync("alice", new[] { "pc1" }, default)) list.Add(r);
+
+        var row = Assert.Single(list);
+        Assert.Equal(ScanStatus.AccessDenied, row.Status);
+        Assert.Contains("pc1 (10.0.0.9) reachable", row.Message);
+    }
+
+    [Fact]
+    public async Task ScanComputer_AccessDenied_StaysAsItWasWhenTheProbeFails()
+    {
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("denied");
+        var scanner = new ProfileScanner(fs, connectionProbe: _ => throw new InvalidOperationException("probe broke"));
+
+        var row = Assert.Single(await scanner.ScanComputerAsync("pc1", default));
+
+        Assert.Equal(ScanStatus.AccessDenied, row.Status);
+        Assert.Contains("Access denied: denied", row.Message);
+        Assert.DoesNotContain("Tried:", row.Message);
+    }
+
+    [Fact]
+    public async Task ScanComputer_AccessDenied_DoesNotWaitLongerThanThreeTimesTheTimeoutForTheProbe()
+    {
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("denied");
+        var scanner = new ProfileScanner(
+            fs,
+            perPcTimeout: TimeSpan.FromMilliseconds(100),
+            connectionProbe: _ =>
+            {
+                Thread.Sleep(TimeSpan.FromSeconds(3));
+                return TwoNamesTwoComputers();
+            });
+
+        var started = DateTime.UtcNow;
+        var row = Assert.Single(await scanner.ScanComputerAsync("pc1", default));
+
+        Assert.True(DateTime.UtcNow - started < TimeSpan.FromSeconds(2), "the scan waited for the slow probe");
+        Assert.Equal(ScanStatus.AccessDenied, row.Status);
+        Assert.DoesNotContain("Tried:", row.Message);
+    }
+
+    [Fact]
+    public async Task ScanComputer_OnlyAnAccessFailureOfTheWholeComputerIsProbed()
+    {
+        var probed = 0;
+        ConnectionTestResult Probe(string _)
+        {
+            Interlocked.Increment(ref probed);
+            return TwoNamesTwoComputers();
+        }
+
+        // An unreachable computer: probing it would only add waiting to a bulk scan.
+        var offline = Basic();
+        offline.Fail = _ => new DirectoryNotFoundException();
+        await new ProfileScanner(offline, connectionProbe: Probe).ScanComputerAsync("pc1", default);
+
+        // One profile that refuses access while the others can be read: the name clearly works.
+        var oneDenied = Basic();
+        oneDenied.Folders["pc1"].Add("carol");
+        oneDenied.FailNtUser = (_, user) => user == "carol" ? new UnauthorizedAccessException("denied") : null;
+        await new ProfileScanner(oneDenied, connectionProbe: Probe).ScanComputerAsync("pc1", default);
+
+        Assert.Equal(0, probed);
+    }
+
     [Fact]
     public async Task FindUser_ReturnsOnlyComputersWithProfile_IncludingErrors()
     {
