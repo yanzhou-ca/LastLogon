@@ -155,6 +155,10 @@ public partial class ScanWindow : Window
 
     private async Task StartScanAsync()
     {
+        // Enter in an input field gets here while the Scan button is disabled, so a scan or a
+        // directory search that is already running has to be refused here as well.
+        if (_vm.IsScanning || _vm.IsSearchingAd || _historyVm.IsScanning) return;
+
         if (LogonHistoryRadio.IsChecked == true)
         {
             _historyVm.ComputersText = ComputersBox.Text;

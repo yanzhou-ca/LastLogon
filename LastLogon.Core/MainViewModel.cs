@@ -12,6 +12,7 @@ public class MainViewModel : INotifyPropertyChanged
     private readonly Action<Action> _dispatch;
     private CancellationTokenSource? _cts;
     private CancellationTokenSource? _adCts;
+    private int _scanGeneration;
     private LookupMode _mode;
     private string _computersText = "";
     private string _username = "";
@@ -67,46 +68,59 @@ public class MainViewModel : INotifyPropertyChanged
         if (computers.Count == 0) { StatusText = "Computer name: Enter at least one computer name."; return; }
         if (Mode == LookupMode.ByUser && user.Length == 0) { StatusText = "Username: Enter a username."; return; }
 
-        Results.Clear();
-
-        // Stop a scan that is still running before starting a new one. The old source is not
-        // disposed here: the previous scan may still be unwinding and using its token.
+        // A scan that is still running is replaced. It is cancelled before the list is cleared,
+        // so that it cannot add results to the list of the new scan, and it stops reporting
+        // anything once it has been replaced: the state belongs to the scan that is current.
         _cts?.Cancel();
+        var generation = ++_scanGeneration;
+        Results.Clear();
         var cts = new CancellationTokenSource();
         _cts = cts;
         var ct = cts.Token;
         IsScanning = true;
         StatusText = "Scanning…";
+
+        void Add(ProfileResult result) => _dispatch(() =>
+        {
+            if (generation == _scanGeneration) Insert(result);
+        });
+
         try
         {
             if (Mode == LookupMode.ByComputer)
             {
                 await foreach (var r in _scanner.ScanComputersAsync(computers, ct))
-                    _dispatch(() => Insert(r));
+                    Add(r);
             }
             else
             {
                 await foreach (var r in _scanner.FindUserAsync(user, computers, ct))
-                    _dispatch(() => Insert(r));
+                    Add(r);
             }
-            StatusText = ct.IsCancellationRequested ? $"Cancelled. {Results.Count} result(s)." : $"Done. {Results.Count} result(s).";
+            if (generation == _scanGeneration)
+                StatusText = ct.IsCancellationRequested ? $"Cancelled. {Results.Count} result(s)." : $"Done. {Results.Count} result(s).";
         }
         catch (OperationCanceledException)
         {
-            StatusText = $"Cancelled. {Results.Count} result(s).";
+            if (generation == _scanGeneration)
+                StatusText = $"Cancelled. {Results.Count} result(s).";
         }
         catch (Exception ex)
         {
-            StatusText = "Scan failed: " + ex.Message;
+            if (generation == _scanGeneration)
+                StatusText = "Scan failed: " + ex.Message;
         }
         finally
         {
-            IsScanning = false;
-            if (ReferenceEquals(_cts, cts))
+            if (generation == _scanGeneration)
             {
+                IsScanning = false;
                 _cts = null;
-                cts.Dispose();
             }
+
+            // The scan has finished with its token, so its own source can go whether or not it
+            // is still the current one.
+            cts.Dispose();
         }
     }
 

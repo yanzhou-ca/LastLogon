@@ -49,11 +49,31 @@ public class ProfileScanner
             var results = await RunWithTimeout(() =>
             {
                 var list = new List<ProfileResult>();
+                UnauthorizedAccessException? firstDenied = null;
                 foreach (var folder in _fs.ListUserFolders(computer))
                 {
                     if (SystemProfiles.Contains(folder)) continue;
-                    list.Add(ReadProfile(computer, folder));
+
+                    try
+                    {
+                        list.Add(ReadProfile(computer, folder));
+                    }
+                    catch (UnauthorizedAccessException ex)
+                    {
+                        // A folder whose ACL refuses this account says nothing about the other
+                        // profiles, so it gets a row of its own and the scan goes on. Any other
+                        // failure still ends the computer, because a lost connection would fail
+                        // every profile after it in the same way.
+                        firstDenied ??= ex;
+                        list.Add(DeniedProfile(computer, folder, ex));
+                    }
                 }
+
+                // When no profile could be read at all, the problem is the account or the share
+                // and not one folder, so the computer is reported once, with the guidance.
+                if (firstDenied is not null && list.All(r => r.Status == ScanStatus.AccessDenied))
+                    throw firstDenied;
+
                 return list;
             }, ct, task => pending = task);
 
@@ -250,6 +270,26 @@ public class ProfileScanner
             t => { _ = t.Exception; },
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
         throw new TimeoutException("Timed out");
+    }
+
+    /// <summary>
+    /// The row for one profile folder that could not be read while the others could. It keeps the
+    /// reason from the system, which names the file, and says that the account and the share are
+    /// fine, so that the operator does not go looking for missing administrator rights.
+    /// </summary>
+    private static ProfileResult DeniedProfile(string computer, string folder, UnauthorizedAccessException exception)
+    {
+        var reason = exception.Message.Trim();
+        var text = reason.Length == 0 ? "Access denied" : "Access denied: " + reason;
+        if (!text.EndsWith('.')) text += ".";
+
+        return new ProfileResult(
+            computer,
+            folder,
+            null,
+            null,
+            ScanStatus.AccessDenied,
+            text + " The other profiles on this computer could be read.");
     }
 
     private static ProfileResult Failure(string computer, string user, Exception ex) => ex switch

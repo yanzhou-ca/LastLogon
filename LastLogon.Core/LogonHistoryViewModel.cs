@@ -29,6 +29,7 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
     private readonly TimeSpan _maxRange;
     private readonly int _maxEvents;
     private CancellationTokenSource? _cancellation;
+    private int _scanGeneration;
     private string _computersText = "";
     private DateTimeOffset _startLocal;
     private DateTimeOffset _endLocal;
@@ -145,7 +146,19 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
         private set => Set(ref _statusText, value);
     }
 
-    public void Cancel() => _cancellation?.Cancel();
+    public void Cancel() => TryCancel(_cancellation);
+
+    private static void TryCancel(CancellationTokenSource? source)
+    {
+        try
+        {
+            source?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The scan ended in the meantime.
+        }
+    }
 
     public async Task ScanAsync()
     {
@@ -179,8 +192,13 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
             return;
         }
 
+        // A scan that is still running is replaced. It is cancelled first, so that it cannot go
+        // on adding events to the list that is cleared for the new scan and so that Cancel
+        // reaches the scan that is current. Once replaced, a scan reports nothing any more:
+        // the state belongs to the scan that is current.
+        TryCancel(_cancellation);
+        var generation = ++_scanGeneration;
         ClearResults();
-        _cancellation?.Dispose();
         var cancellation = new CancellationTokenSource();
         _cancellation = cancellation;
         var cancellationToken = cancellation.Token;
@@ -190,11 +208,18 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
         var fromUtc = StartLocal.ToUniversalTime();
         var toUtc = EndLocal.ToUniversalTime();
 
+        void Post(Action action) => _dispatch(() =>
+        {
+            if (generation == _scanGeneration) action();
+        });
+
         try
         {
             var received = 0;
             await foreach (var update in _scanner.ScanAsync(computers, fromUtc, toUtc, cancellationToken))
             {
+                if (generation != _scanGeneration) break;
+
                 switch (update)
                 {
                     case LogonEventFound found:
@@ -208,39 +233,46 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
                             break;
                         }
                         received++;
-                        _dispatch(() => Insert(found.Event));
+                        Post(() => Insert(found.Event));
                         break;
                     case LogonComputerCompleted completed:
                         if (completed.Truncated) _isTruncated = true;
-                        _dispatch(() => ComputerStatuses.Add(completed));
+                        Post(() => ComputerStatuses.Add(completed));
                         break;
                 }
             }
 
-            var successful = ComputerStatuses.Count(item => item.Status == LogonQueryStatus.Success);
-            var failed = ComputerStatuses.Count - successful;
-            StatusText = _isTruncated
-                ? $"Stopped at the {_maxEvents} event limit. {Events.Count} event(s) collected; results are incomplete."
-                : cancellationToken.IsCancellationRequested
-                    ? $"Cancelled. {Events.Count} event(s); {failed} incomplete computer(s)."
-                    : $"Done. {Events.Count} event(s); {successful} succeeded, {failed} failed.";
+            if (generation == _scanGeneration)
+            {
+                var successful = ComputerStatuses.Count(item => item.Status == LogonQueryStatus.Success);
+                var failed = ComputerStatuses.Count - successful;
+                StatusText = _isTruncated
+                    ? $"Stopped at the {_maxEvents} event limit. {Events.Count} event(s) collected; results are incomplete."
+                    : cancellationToken.IsCancellationRequested
+                        ? $"Cancelled. {Events.Count} event(s); {failed} incomplete computer(s)."
+                        : $"Done. {Events.Count} event(s); {successful} succeeded, {failed} failed.";
+            }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
-            StatusText = $"Cancelled. {Events.Count} event(s); {ComputerStatuses.Count} computer(s) completed.";
+            if (generation == _scanGeneration)
+                StatusText = $"Cancelled. {Events.Count} event(s); {ComputerStatuses.Count} computer(s) completed.";
         }
         catch (Exception ex)
         {
-            StatusText = "Scan failed: " + ex.Message;
+            if (generation == _scanGeneration)
+                StatusText = "Scan failed: " + ex.Message;
         }
         finally
         {
-            IsScanning = false;
-            if (ReferenceEquals(_cancellation, cancellation))
+            if (generation == _scanGeneration)
             {
+                IsScanning = false;
                 _cancellation = null;
             }
 
+            // The scan has finished with its token, so its own source can go whether or not it
+            // is still the current one.
             cancellation.Dispose();
         }
     }

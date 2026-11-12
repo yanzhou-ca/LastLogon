@@ -140,6 +140,60 @@ public class ProfileScannerTests
         Assert.Equal("pc1", row.Computer);
     }
 
+    // D-02: a single profile folder that cannot be read must not hide the profiles that can.
+    [Fact]
+    public async Task ScanComputer_OneUnreadableProfile_KeepsTheProfilesThatCanBeRead()
+    {
+        var fs = Basic();
+        fs.Folders["pc1"].Add("carol");
+        fs.FailNtUser = (_, user) => user == "carol"
+            ? new UnauthorizedAccessException(@"Access to the path '\\pc1\C$\Users\carol\NTUSER.DAT' is denied.")
+            : null;
+
+        var rows = await new ProfileScanner(fs).ScanComputerAsync("pc1", default);
+
+        Assert.Equal(new[] { "bob", "alice", "carol" }, rows.Select(r => r.Username));
+        Assert.Equal(ScanStatus.Ok, rows.Single(r => r.Username == "bob").Status);
+        Assert.Equal(ScanStatus.Ok, rows.Single(r => r.Username == "alice").Status);
+
+        var carol = rows.Single(r => r.Username == "carol");
+        Assert.Equal(ScanStatus.AccessDenied, carol.Status);
+        Assert.Null(carol.LastActivity);
+        Assert.Contains("NTUSER.DAT", carol.Message);
+        // The row must say that the problem is this profile, not the account or the share.
+        Assert.Contains("other profiles", carol.Message);
+        Assert.DoesNotContain("has to be an administrator", carol.Message);
+    }
+
+    // Guard for D-02: when nothing can be read the computer is still reported once, with the
+    // guidance about rights, instead of one noisy row per profile.
+    [Fact]
+    public async Task ScanComputer_NoProfileCanBeRead_ReportsOneRowForTheComputer()
+    {
+        var fs = Basic();
+        fs.FailNtUser = (_, _) => new UnauthorizedAccessException("denied");
+
+        var rows = await new ProfileScanner(fs).ScanComputerAsync("pc1", default);
+
+        var row = Assert.Single(rows);
+        Assert.Equal(ScanStatus.AccessDenied, row.Status);
+        Assert.Equal("", row.Username);
+    }
+
+    // Guard for D-02: only an access problem is attributed to one profile. A lost connection is
+    // not, because every following profile would fail the same way.
+    [Fact]
+    public async Task ScanComputer_ConnectionLostWhileReadingAProfile_ReportsTheComputerAsOffline()
+    {
+        var fs = Basic();
+        fs.FailNtUser = (_, user) => user == "bob" ? new IOException("The network path was not found.") : null;
+
+        var rows = await new ProfileScanner(fs).ScanComputerAsync("pc1", default);
+
+        var row = Assert.Single(rows);
+        Assert.Equal(ScanStatus.Offline, row.Status);
+    }
+
     [Fact]
     public async Task FindUser_ReturnsOnlyComputersWithProfile_IncludingErrors()
     {

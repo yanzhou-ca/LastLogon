@@ -285,6 +285,67 @@ public class LogonHistoryViewModelTests
         Assert.Equal(2, viewModel.FilteredEvents.Count);
     }
 
+    // D-01: pressing Enter again while a history scan runs used to dispose the running scan's
+    // cancellation source without cancelling it, so it could no longer be stopped.
+    [Fact]
+    public async Task ScanAsync_StartedWhileScanning_CancelsTheScanItReplaces()
+    {
+        var scanner = new BlockingScanner();
+        var viewModel = new LogonHistoryViewModel(scanner) { ComputersText = "pc01" };
+
+        var first = viewModel.ScanAsync();
+        var second = viewModel.ScanAsync();
+
+        Assert.True(scanner.Tokens[0].IsCancellationRequested, "the replaced scan keeps running");
+        Assert.False(scanner.Tokens[1].IsCancellationRequested);
+
+        viewModel.Cancel();
+        Assert.True(scanner.Tokens[1].IsCancellationRequested, "Cancel must reach the new scan");
+
+        scanner.Release(0);
+        scanner.Release(1);
+        await Task.WhenAll(first, second).WaitAsync(TimeSpan.FromSeconds(5));
+    }
+
+    [Fact]
+    public async Task ScanAsync_StartedWhileScanning_KeepsScanningUntilTheNewScanEnds()
+    {
+        var scanner = new BlockingScanner();
+        var viewModel = new LogonHistoryViewModel(scanner) { ComputersText = "pc01" };
+
+        var first = viewModel.ScanAsync();
+        var second = viewModel.ScanAsync();
+
+        scanner.Release(0);
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.True(viewModel.IsScanning, "the replaced scan ended, but the new scan is still running");
+        Assert.StartsWith("Scanning", viewModel.StatusText);
+
+        scanner.Release(1);
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(viewModel.IsScanning);
+        Assert.StartsWith("Done.", viewModel.StatusText);
+    }
+
+    [Fact]
+    public async Task ScanAsync_StartedWhileScanning_IgnoresWhatTheReplacedScanStillDelivers()
+    {
+        var scanner = new BlockingScanner();
+        var viewModel = new LogonHistoryViewModel(scanner) { ComputersText = "pc01" };
+
+        var first = viewModel.ScanAsync();
+        var second = viewModel.ScanAsync();
+
+        scanner.Release(0);                       // the replaced scan delivers one more event
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        scanner.Release(1);
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(new[] { "scan2", "late2" }, viewModel.Events.Select(e => e.AccountName));
+        Assert.Single(viewModel.ComputerStatuses);
+    }
+
     private static FakeScanner ScannerWithEvents(params LogonEventRecord[] events)
         => new((_, _, _, _) => Updates(
             events.Select(item => (LogonScanUpdate)new LogonEventFound(item))
@@ -339,6 +400,41 @@ public class LogonHistoryViewModelTests
         yield return new LogonEventFound(eventRecord);
         await new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously)
             .Task.WaitAsync(cancellationToken);
+    }
+
+    /// <summary>
+    /// A scanner whose every call delivers one event and then waits for <see cref="Release"/>, like
+    /// a slow remote query. It deliberately ignores its token: a real scanner needs a moment to
+    /// stop, and the view model must cope with what arrives in that moment.
+    /// </summary>
+    private sealed class BlockingScanner : ILogonEventScanner
+    {
+        private readonly List<TaskCompletionSource> _gates = new();
+
+        public List<CancellationToken> Tokens { get; } = new();
+
+        public IAsyncEnumerable<LogonScanUpdate> ScanAsync(
+            IEnumerable<string> computers,
+            DateTimeOffset fromUtc,
+            DateTimeOffset toUtc,
+            CancellationToken cancellationToken)
+        {
+            var gate = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+            _gates.Add(gate);
+            Tokens.Add(cancellationToken);
+            return Run(_gates.Count, gate.Task);
+        }
+
+        public void Release(int index) => _gates[index].SetResult();
+
+        private static async IAsyncEnumerable<LogonScanUpdate> Run(int number, Task gate)
+        {
+            var time = new DateTimeOffset(2025, 3, 4, 5, 0, 0, TimeSpan.Zero);
+            yield return new LogonEventFound(Record("pc01", "scan" + number, "CORP", 2, time));
+            await gate;
+            yield return new LogonEventFound(Record("pc01", "late" + number, "CORP", 2, time));
+            yield return new LogonComputerCompleted("pc01", LogonQueryStatus.Success, null, 2);
+        }
     }
 
     private sealed class FakeScanner(

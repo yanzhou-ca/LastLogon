@@ -104,6 +104,30 @@ public class MainViewModelTests
         Assert.False(vm.IsScanning);
     }
 
+    // D-01: a scan started while another one runs replaces it. The replaced scan unwinding must
+    // not report "not scanning" or overwrite the status of the scan that is still running.
+    [Fact]
+    public async Task Scan_StartedWhileAnotherIsRunning_KeepsScanningUntilTheNewScanEnds()
+    {
+        var (vm, fs) = Make();
+        fs.Delay = TimeSpan.FromMilliseconds(600);
+
+        vm.ComputersText = "pc1";
+        var first = vm.ScanAsync();
+        await Task.Delay(100);
+        vm.ComputersText = "pc2";
+        var second = vm.ScanAsync();
+
+        await first.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.True(vm.IsScanning, "the replaced scan ended, but the new scan is still running");
+        Assert.Equal("Scanning…", vm.StatusText);
+
+        await second.WaitAsync(TimeSpan.FromSeconds(5));
+        Assert.False(vm.IsScanning);
+        Assert.StartsWith("Done.", vm.StatusText);
+        Assert.Equal(new[] { "pc2" }, vm.Results.Select(r => r.Computer));
+    }
+
     [Fact]
     public void IsStale_UsesStaleDays()
     {
