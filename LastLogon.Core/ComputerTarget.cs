@@ -66,14 +66,21 @@ public static class ComputerTarget
 
     /// <summary>
     /// Qualifies <paramref name="computer"/> for a connection. A name that already carries a
-    /// domain is used as it is, a short name is completed with the current DNS domain unless
-    /// the operator asked for the short name.
+    /// domain is used as it is, a short name is completed with the given DNS domain unless the
+    /// short name is asked for.
+    /// <para>
+    /// The addressing mode can be given explicitly. Callers that have to try both forms, such
+    /// as the connection test, must not be influenced by the mode the operator selected.
+    /// </para>
     /// </summary>
-    public static string Qualify(string computer, string? dnsDomain = null)
+    public static string Qualify(
+        string computer,
+        string? dnsDomain = null,
+        Addressing? addressing = null)
     {
         var name = (computer ?? "").Trim();
         if (name.Contains('.')) return name;
-        if (_addressing == Addressing.ShortName) return name;
+        if ((addressing ?? _addressing) == Addressing.ShortName) return name;
 
         var domain = dnsDomain ?? DnsDomain;
         return IsValidDnsDomain(domain) ? $"{name}.{domain}" : name;

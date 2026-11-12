@@ -11,7 +11,8 @@ public static class InputParser
             var name = raw.Trim();
             if (name.Length == 0) continue;
             if (!IsValidComputerName(name))
-                throw new FormatException("Computer names must be short hostnames without path syntax.");
+                throw new FormatException(
+                    "Computer names must be host names, short or fully qualified, without path syntax.");
             if (seen.Add(name)) list.Add(name);
         }
         return list;

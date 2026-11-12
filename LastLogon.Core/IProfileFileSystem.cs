@@ -17,10 +17,19 @@ public sealed class SmbProfileFileSystem : IProfileFileSystem
     {
         var names = InputParser.ParseComputers(computer);
         if (names.Count != 1 || !names[0].Equals(computer, StringComparison.OrdinalIgnoreCase))
-            throw new ArgumentException("Only a short computer hostname can be scanned.", nameof(computer));
+            throw new ArgumentException("Only one computer host name can be scanned.", nameof(computer));
 
-        if (!ComputerTarget.IsValidDnsDomain(ComputerTarget.DnsDomain))
-            throw new InvalidOperationException("The current DNS domain could not be determined.");
+        // A short name in domain-qualified mode must not silently fall back to short-name
+        // resolution, which a name answer on the network can redirect. A fully qualified name
+        // and the short-name mode do not need the domain at all.
+        if (ComputerTarget.AddressingMode == ComputerTarget.Addressing.DomainQualified
+            && InputParser.IsShortComputerName(names[0])
+            && !ComputerTarget.IsValidDnsDomain(ComputerTarget.DnsDomain))
+        {
+            throw new InvalidOperationException(
+                "The current DNS domain could not be determined. Enter the fully qualified "
+                + "computer name, or choose the short name.");
+        }
 
         return ComputerTarget.UncPath(computer, "Users");
     }

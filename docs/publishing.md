@@ -59,7 +59,7 @@ The application itself is 260 KB. Everything else is the framework.
 ```powershell
 dotnet restore LastLogon.slnx --force-evaluate --use-lock-file
 dotnet build LastLogon.slnx -c Release --no-restore
-dotnet publish LastLogon.csproj -c Release -p:Platform=x64 --no-restore
+dotnet publish LastLogon.csproj -c Release -p:Platform=x64 -r win-x64 --no-restore
 dotnet publish LastLogon.csproj -c Release -p:PublishProfile=standalone-win-x64 --no-restore
 ```
 

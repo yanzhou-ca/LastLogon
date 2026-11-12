@@ -56,6 +56,30 @@ public class SmbProfileFileSystemTests
     }
 
     [Fact]
+    public void Root_AcceptsAShortNameWithoutADomainInShortNameMode()
+    {
+        WithDnsDomain("corp/share", () =>
+        {
+            ComputerTarget.AddressingMode = ComputerTarget.Addressing.ShortName;
+            try
+            {
+                Assert.Equal(@"\\pc01\C$\Users", InvokeRoot("pc01"));
+            }
+            finally
+            {
+                ComputerTarget.AddressingMode = ComputerTarget.Addressing.DomainQualified;
+            }
+        });
+    }
+
+    [Fact]
+    public void Root_AcceptsAFullyQualifiedNameWithoutADomain()
+    {
+        WithDnsDomain("corp/share", () =>
+            Assert.Equal(@"\\pc01.other.example\C$\Users", InvokeRoot("pc01.other.example")));
+    }
+
+    [Fact]
     public void Root_RejectsProfileNameThatCouldEscapeTheShare()
     {
         WithDnsDomain("corp.example", () =>

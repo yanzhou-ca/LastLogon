@@ -1,4 +1,5 @@
 using System.Net;
+using System.Net.Sockets;
 
 namespace LastLogon.Core;
 
@@ -17,11 +18,34 @@ public sealed record ConnectionTestResult(
     IReadOnlyList<ConnectionAttempt> Attempts)
 {
     /// <summary>One line describing what the operator should do next.</summary>
-    public string Summary => Succeeded
-        ? $"Reachable as {AddressedAs}."
-        : Attempts.Count > 1
-            ? $"Not reachable. {Attempts[^1].Message} {Hint(Attempts[^1].Win32Error)}"
-            : $"Not reachable. {Attempts[^1].Message} {Hint(Attempts[^1].Win32Error)}";
+    public string Summary
+    {
+        get
+        {
+            if (Succeeded)
+            {
+                var readable = Attempts.Count > 0 ? Attempts[^1].Message : null;
+                return string.IsNullOrEmpty(readable)
+                    ? $"Reachable as {AddressedAs}."
+                    : $"Reachable as {AddressedAs}. {readable}";
+            }
+
+            if (Attempts.Count == 0)
+                return $"Not reachable as {AddressedAs}.";
+
+            // The first attempt is the one the scan would use in the selected mode, so its
+            // error is the one that explains the scan result.
+            var primary = Attempts[0];
+            var code = primary.Win32Error is int error ? $" (Windows error {error})" : string.Empty;
+            var message = string.IsNullOrEmpty(primary.Message)
+                ? "The connection failed."
+                : primary.Message;
+            var hint = Hint(primary.Win32Error);
+            return hint.Length == 0
+                ? $"Not reachable{code}. {message}"
+                : $"Not reachable{code}. {message} {hint}";
+        }
+    }
 
     /// <summary>
     /// Turns the Windows error into something an administrator can act on. The code says much
@@ -34,7 +58,8 @@ public sealed record ConnectionTestResult(
              + "or the C$ share is turned off, or the name reaches a different computer.",
         53 => "The computer could not be found under that name. The name or the domain is wrong.",
         64 => "The computer could not be found under that name. The name or the domain is wrong.",
-        67 => "The name does not exist. The computer is not registered under that name.",
+        67 => "The network name cannot be found: the name is wrong, or the C$ share is turned off "
+              + "on that computer.",
         1326 => "The account was refused by the server. The credentials were not accepted.",
         _ => string.Empty,
     };
@@ -47,13 +72,17 @@ public sealed record ConnectionTestResult(
 /// </summary>
 public static class ConnectionTest
 {
-    /// <summary>How long a single attempt may take.</summary>
+    /// <summary>How long a single attempt may take before it is reported as unanswered.</summary>
     private static readonly TimeSpan AttemptTimeout = TimeSpan.FromSeconds(10);
 
     public static ConnectionTestResult Run(string computer, ComputerTarget.Addressing mode)
     {
+        var names = InputParser.ParseComputers(computer);
+        if (names.Count != 1)
+            throw new ArgumentException("Only one computer host name can be tested.", nameof(computer));
+        computer = names[0];
+
         var attempts = new List<ConnectionAttempt>();
-        var resolved = Resolve(computer);
 
         foreach (var candidate in Candidates(computer, mode))
         {
@@ -61,20 +90,34 @@ public static class ConnectionTest
             attempts.Add(attempt);
             if (attempt.Succeeded)
             {
-                return new ConnectionTestResult(computer, resolved, true, candidate, attempts);
+                return new ConnectionTestResult(
+                    computer,
+                    Resolve(candidate),
+                    true,
+                    candidate,
+                    attempts);
             }
         }
 
+        // The first address is the one the scan would use in the selected mode, so it is the
+        // one whose resolution explains the failure when nothing could be reached.
+        var addressedAs = attempts.Count > 0 ? attempts[0].AddressedAs : computer;
         return new ConnectionTestResult(
             computer,
-            resolved,
+            Resolve(addressedAs),
             false,
-            attempts.Count > 0 ? attempts[^1].AddressedAs : computer,
+            addressedAs,
             attempts);
     }
 
-    /// <summary>The addresses that are tried, in the order the operator asked for them.</summary>
-    private static IEnumerable<string> Candidates(string computer, ComputerTarget.Addressing mode)
+    /// <summary>
+    /// The addresses that are tried, in the order the operator asked for them. Both forms are
+    /// always produced, because finding out which of them works is the point of the test.
+    /// </summary>
+    internal static IEnumerable<string> Candidates(
+        string computer,
+        ComputerTarget.Addressing mode,
+        string? dnsDomain = null)
     {
         if (computer.Contains('.'))
         {
@@ -83,7 +126,10 @@ public static class ConnectionTest
             yield break;
         }
 
-        var qualified = ComputerTarget.Qualify(computer, ComputerTarget.DnsDomain);
+        var qualified = ComputerTarget.Qualify(
+            computer,
+            dnsDomain ?? ComputerTarget.DnsDomain,
+            ComputerTarget.Addressing.DomainQualified);
         var bare = computer;
 
         if (mode == ComputerTarget.Addressing.ShortName)
@@ -98,12 +144,18 @@ public static class ConnectionTest
         }
     }
 
+    /// <summary>
+    /// The address a name resolves to, preferring IPv4 because that is the address an
+    /// administrator compares with the one they expect.
+    /// </summary>
     private static string? Resolve(string computer)
     {
         try
         {
             var entry = Dns.GetHostEntry(computer);
-            return entry.AddressList.Count() > 0 ? entry.AddressList[0].ToString() : null;
+            var address = entry.AddressList.FirstOrDefault(a => a.AddressFamily == AddressFamily.InterNetwork)
+                          ?? entry.AddressList.FirstOrDefault();
+            return address?.ToString();
         }
         catch (Exception)
         {
@@ -112,6 +164,25 @@ public static class ConnectionTest
     }
 
     private static ConnectionAttempt Try(string address)
+    {
+        // A computer that does not answer can hold a directory call for a long time. The work
+        // runs on its own thread so that it cannot starve the thread pool, and it is left to
+        // finish on its own; what matters is that the operator gets an answer.
+        var work = Task.Factory.StartNew(
+            () => TryOnce(address),
+            CancellationToken.None,
+            TaskCreationOptions.LongRunning,
+            TaskScheduler.Default);
+        return work.Wait(AttemptTimeout)
+            ? work.Result
+            : new ConnectionAttempt(
+                address,
+                false,
+                $"No answer within {AttemptTimeout.TotalSeconds:0} seconds.",
+                null);
+    }
+
+    private static ConnectionAttempt TryOnce(string address)
     {
         var path = $@"\\{address}\C$\Users";
         try
@@ -125,14 +196,30 @@ public static class ConnectionTest
         }
         catch (Exception ex)
         {
-            return new ConnectionAttempt(address, false, ex.Message, ErrorCode(ex));
+            return new ConnectionAttempt(address, false, Readable(ex.Message), ErrorCode(ex));
         }
     }
 
-    /// <summary>The Windows error code behind the exception, for example 5 for access denied.</summary>
-    private static int? ErrorCode(Exception exception)
+    /// <summary>
+    /// Removes the path that the directory APIs append to an error. The address is already part
+    /// of the report, and the appended path makes the sentence read badly.
+    /// </summary>
+    internal static string Readable(string message)
     {
-        var code = exception.HResult & 0xFFFF;
+        var marker = message.LastIndexOf(" : '", StringComparison.Ordinal);
+        return marker > 0 ? message[..marker].TrimEnd() : message;
+    }
+
+    /// <summary>
+    /// The Windows error code behind the exception, for example 5 for access denied. Only Win32
+    /// errors have such a code; a framework error would produce a meaningless number.
+    /// </summary>
+    internal static int? ErrorCode(Exception exception)
+    {
+        var hresult = (uint)exception.HResult;
+        if ((hresult & 0xFFFF0000) != 0x80070000) return null;
+
+        var code = (int)(hresult & 0xFFFF);
         return code == 0 ? null : code;
     }
 }

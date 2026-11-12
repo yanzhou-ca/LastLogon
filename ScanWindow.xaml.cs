@@ -21,6 +21,7 @@ public partial class ScanWindow : Window
     private readonly MainViewModel _vm;
     private readonly LogonHistoryViewModel _historyVm;
     private bool _hasCompletedScan;
+    private int _connectionTestGeneration;
     private const string LocalDateTimeFormat = "yyyy-MM-dd HH:mm";
 
     public ScanWindow()
@@ -200,6 +201,7 @@ public partial class ScanWindow : Window
         if (sender == ComputersBox)
         {
             ComputersErrorLabel.Visibility = Visibility.Collapsed;
+            ClearConnectionTest();
             UpdateComputerTargetHint();
         }
 
@@ -235,16 +237,19 @@ public partial class ScanWindow : Window
         }
 
         var computer = computers[0];
+        var generation = ++_connectionTestGeneration;
         ConnectionTestLabel.Text = "Testing " + computer + "…";
         TestButton.IsEnabled = false;
         try
         {
             var result = await Task.Run(() => ConnectionTest.Run(computer, ComputerTarget.AddressingMode));
-            ConnectionTestLabel.Text = Describe(result);
+            if (generation == _connectionTestGeneration)
+                ConnectionTestLabel.Text = Describe(result);
         }
         catch (Exception ex)
         {
-            ConnectionTestLabel.Text = "Test failed: " + ex.Message;
+            if (generation == _connectionTestGeneration)
+                ConnectionTestLabel.Text = "Test failed: " + ex.Message;
         }
         finally
         {
@@ -252,22 +257,33 @@ public partial class ScanWindow : Window
         }
     }
 
+    /// <summary>
+    /// Drops a test result that no longer describes the input, so that a result for the
+    /// previous computer is not mistaken for the current one.
+    /// </summary>
+    private void ClearConnectionTest()
+    {
+        _connectionTestGeneration++;
+        if (ConnectionTestLabel is not null) ConnectionTestLabel.Text = string.Empty;
+    }
+
     private static string Describe(ConnectionTestResult result)
     {
-        var text = result.Succeeded
-            ? result.Summary
-            : result.Summary;
+        var text = result.Summary;
 
         if (!string.IsNullOrEmpty(result.ResolvedAddress))
             text += $" Resolves to {result.ResolvedAddress}.";
 
         if (result.Attempts.Count > 1)
         {
-            foreach (var attempt in result.Attempts)
+            var details = result.Attempts.Select(attempt =>
             {
-                var code = attempt.Win32Error is int error ? $" (Windows error {error})" : "";
-                text += $" [{attempt.AddressedAs}: {(attempt.Succeeded ? "reachable" : "failed" + code)}]";
-            }
+                var code = attempt.Win32Error is int error ? $" (Windows error {error})" : string.Empty;
+                return attempt.Succeeded
+                    ? $"[{attempt.AddressedAs}: reachable]"
+                    : $"[{attempt.AddressedAs}: failed{code}]";
+            });
+            text += " " + string.Join(" ", details);
         }
 
         return text;
@@ -281,6 +297,7 @@ public partial class ScanWindow : Window
             ? ComputerTarget.Addressing.ShortName
             : ComputerTarget.Addressing.DomainQualified;
 
+        ClearConnectionTest();
         UpdateComputerTargetHint();
     }
 
@@ -304,11 +321,19 @@ public partial class ScanWindow : Window
             return;
         }
 
+        var allShort = computers.All(InputParser.IsShortComputerName);
+        var domain = ComputerTarget.DnsDomain;
+        var qualified = allShort
+                        && domain.Length > 0
+                        && ComputerTarget.AddressingMode == ComputerTarget.Addressing.DomainQualified;
+
         ComputerTargetLabel.Text = computers.Count switch
         {
             1 => $"Reads {ComputerTarget.UncPath(computers[0], "Users")}",
             0 => string.Empty,
-            _ => $"Reads {computers.Count} computers in {ComputerTarget.DnsDomain}",
+            _ when qualified => $"Reads {computers.Count} computers in {domain}",
+            _ when allShort => $"Reads {computers.Count} computers by short name",
+            _ => $"Reads {computers.Count} computers as entered",
         };
 
         if (RunContextLabel is null) return;

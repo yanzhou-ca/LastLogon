@@ -94,6 +94,26 @@ public class ComputerTargetTests
     }
 
     [Fact]
+    public void Qualify_CanIgnoreTheOperatorsChoiceForACallerThatTriesBothForms()
+    {
+        var previous = ComputerTarget.AddressingMode;
+        try
+        {
+            ComputerTarget.AddressingMode = ComputerTarget.Addressing.ShortName;
+            Assert.Equal(
+                "pc01.corp.example",
+                ComputerTarget.Qualify(
+                    "pc01",
+                    "corp.example",
+                    ComputerTarget.Addressing.DomainQualified));
+        }
+        finally
+        {
+            ComputerTarget.AddressingMode = previous;
+        }
+    }
+
+    [Fact]
     public void UncPath_BuildsAPathInTheAdministrativeShare()
         => Assert.Equal(
             @"\\pc01.corp.example\C$\Users\alice",
