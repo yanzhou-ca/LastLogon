@@ -12,8 +12,6 @@ publish/
 *.sln.docstates
 *.tmp
 *.bak
-*.Backup.tmp
-*.Backup *.tmp
 
 ## NuGet
 *.nupkg
