@@ -4,6 +4,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Globalization;
+using System.Security.Principal;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Data;
@@ -46,7 +48,17 @@ public partial class ScanWindow : Window
         _vm.Results.CollectionChanged += (_, _) => UpdateEmptyResultsState();
         UpdateEmptyResultsState();
         UpdateOpenFolderButton();
+        UpdateComputerTargetHint();
         Mode_Changed(this, new RoutedEventArgs());
+
+        if (!IsElevated())
+        {
+            // The manifest asks for administrator rights, so this only happens when the
+            // application is started in a way that drops them.
+            StatusLabel.Text =
+                "This tool reads administrative shares on other computers and needs to run "
+                + "elevated. Start it with Run as administrator.";
+        }
 
         _vm.PropertyChanged += (_, e) =>
         {
@@ -126,7 +138,20 @@ public partial class ScanWindow : Window
         UpdateScanControls();
     }
 
-    private async void Scan_Click(object sender, RoutedEventArgs e)
+    private async void Scan_Click(object sender, RoutedEventArgs e) => await StartScanAsync();
+
+    /// <summary>
+    /// Pressing Enter in one of the input fields starts the scan. The event is tunnelled, so the
+    /// text box never gets to insert a line break for it.
+    /// </summary>
+    private async void LookupInput_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key != Key.Enter || e.KeyboardDevice.Modifiers != ModifierKeys.None) return;
+        e.Handled = true;
+        await StartScanAsync();
+    }
+
+    private async Task StartScanAsync()
     {
         if (LogonHistoryRadio.IsChecked == true)
         {
@@ -172,13 +197,59 @@ public partial class ScanWindow : Window
 
     private void ValidationInput_TextChanged(object sender, TextChangedEventArgs e)
     {
-        if (sender == ComputersBox) ComputersErrorLabel.Visibility = Visibility.Collapsed;
+        if (sender == ComputersBox)
+        {
+            ComputersErrorLabel.Visibility = Visibility.Collapsed;
+            UpdateComputerTargetHint();
+        }
+
         if (sender == UsernameBox) UsernameErrorLabel.Visibility = Visibility.Collapsed;
         if (sender == HistoryStartBox || sender == HistoryEndBox)
             HistoryTimeErrorLabel.Visibility = Visibility.Collapsed;
         if (_vm.StatusText.StartsWith("Computer name: ", StringComparison.Ordinal)
             || _vm.StatusText.StartsWith("Username: ", StringComparison.Ordinal))
             StatusLabel.Text = "Ready";
+    }
+
+    /// <summary>
+    /// Shows which host the scan will actually talk to, so that a name that resolves to the
+    /// wrong machine is visible before the scan runs.
+    /// </summary>
+    private void UpdateComputerTargetHint()
+    {
+        if (ComputerTargetLabel is null) return;
+
+        IReadOnlyList<string> computers;
+        try
+        {
+            computers = InputParser.ParseComputers(ComputersBox.Text);
+        }
+        catch (FormatException)
+        {
+            ComputerTargetLabel.Text = string.Empty;
+            return;
+        }
+
+        ComputerTargetLabel.Text = computers.Count switch
+        {
+            1 => $"Reads {ComputerTarget.UncPath(computers[0], "Users")}",
+            0 => string.Empty,
+            _ => $"Reads {computers.Count} computers in {ComputerTarget.DnsDomain}",
+        };
+    }
+
+    /// <summary>True when the process holds the full administrator token.</summary>
+    private static bool IsElevated()
+    {
+        try
+        {
+            using var identity = WindowsIdentity.GetCurrent();
+            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+        catch (Exception)
+        {
+            return false;
+        }
     }
 
     private void UpdateValidationFeedback()

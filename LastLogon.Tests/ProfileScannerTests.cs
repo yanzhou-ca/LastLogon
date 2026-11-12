@@ -81,6 +81,17 @@ public class ProfileScannerTests
     }
 
     [Fact]
+    public async Task ScanComputer_UnauthorizedAccess_KeepsTheReason()
+    {
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("Access to the path '\\\\pc01.corp.example\\C$' is denied.");
+        var r = await new ProfileScanner(fs).ScanComputerAsync("pc1", default);
+        var row = Assert.Single(r);
+        Assert.Equal(ScanStatus.AccessDenied, row.Status);
+        Assert.Contains("corp.example", row.Message);
+    }
+
+    [Fact]
     public async Task ScanComputer_NoUserProfiles_ReportsNoProfile()
     {
         var fs = Basic();

@@ -64,14 +64,17 @@
             <StackPanel x:Name="UsernamePanel" Visibility="Collapsed" Margin="0,0,0,8">
                 <TextBlock Text="Username (jdoe, CORP\jdoe or jdoe@corp.local)" Style="{StaticResource FieldLabel}" />
                 <TextBox x:Name="UsernameBox" Padding="6,4" AutomationProperties.Name="Username"
-                         TextChanged="ValidationInput_TextChanged" />
+                         TextChanged="ValidationInput_TextChanged" PreviewKeyDown="LookupInput_PreviewKeyDown" />
                 <TextBlock x:Name="UsernameErrorLabel" Style="{StaticResource ValidationMessage}"
                            Visibility="Collapsed" />
             </StackPanel>
             <TextBlock x:Name="ComputersLabel" Text="Computer name (short name)" Style="{StaticResource FieldLabel}" />
             <TextBox x:Name="ComputersBox" AcceptsReturn="True" TextWrapping="Wrap" Padding="6,4"
                      MinHeight="30" MaxHeight="110" VerticalScrollBarVisibility="Auto"
-                     AutomationProperties.Name="Computer names" TextChanged="ValidationInput_TextChanged" />
+                     AutomationProperties.Name="Computer names" TextChanged="ValidationInput_TextChanged"
+                     PreviewKeyDown="LookupInput_PreviewKeyDown" />
+            <TextBlock x:Name="ComputerTargetLabel" Style="{StaticResource Caption}"
+                       Margin="0,2,0,0" TextWrapping="Wrap" />
             <TextBlock x:Name="ComputersErrorLabel" Style="{StaticResource ValidationMessage}"
                        Visibility="Collapsed" />
             <StackPanel x:Name="ListButtons" Orientation="Horizontal" Visibility="Collapsed" Margin="0,8,0,0">
@@ -90,12 +93,14 @@
                         <TextBlock Text="From (local time)" Style="{StaticResource FieldLabel}" />
                         <TextBox x:Name="HistoryStartBox" Padding="6,4"
                                  TextChanged="ValidationInput_TextChanged"
+                                 PreviewKeyDown="LookupInput_PreviewKeyDown"
                                  AutomationProperties.Name="History start local date and time" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Margin="0,0,12,0">
                         <TextBlock Text="To (local time)" Style="{StaticResource FieldLabel}" />
                         <TextBox x:Name="HistoryEndBox" Padding="6,4"
                                  TextChanged="ValidationInput_TextChanged"
+                                 PreviewKeyDown="LookupInput_PreviewKeyDown"
                                  AutomationProperties.Name="History end local date and time" />
                     </StackPanel>
                     <StackPanel Grid.Column="2" Margin="0,0,12,0">

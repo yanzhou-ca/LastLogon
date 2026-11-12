@@ -1,3 +1,4 @@
+using System.DirectoryServices.ActiveDirectory;
 using System.Net.NetworkInformation;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -16,6 +17,9 @@ namespace LastLogon.Core;
 /// </summary>
 public static class ComputerTarget
 {
+    /// <summary>How long the domain lookup may take before the machine's own DNS suffix is used.</summary>
+    private static readonly TimeSpan DomainLookupTimeout = TimeSpan.FromSeconds(3);
+
     private static string? _dnsDomain;
 
     /// <summary>
@@ -76,16 +80,18 @@ public static class ComputerTarget
 
     private static string ResolveDnsDomain()
     {
-        // A domain-joined computer reports its own domain through GetComputerNameEx, which
-        // reads the machine's configuration. USERDNSDOMAIN is only a fallback, because it lives
-        // in the user's environment and anything running as that user can change it.
-        if (IsDomainJoined())
-        {
-            var joined = GetDnsDomainName();
-            if (joined.Contains('.') && IsValidDnsDomain(joined))
-                return joined.Trim().TrimEnd('.');
-        }
+        // The domain this computer is joined to is the authoritative name, and it is the same
+        // domain the directory search runs in. It cannot be influenced by anything the user
+        // changes, unlike the USERDNSDOMAIN environment variable.
+        var joined = GetActiveDirectoryDomain();
+        if (IsValidDnsDomain(joined)) return joined.Trim().TrimEnd('.');
 
+        // The machine's own DNS suffix. It is normally the same domain, but it can be set to
+        // something else, and then the name above is the better answer.
+        var suffix = GetDnsDomainName();
+        if (suffix.Contains('.') && IsValidDnsDomain(suffix)) return suffix.Trim().TrimEnd('.');
+
+        // The user's environment and the NetBIOS domain are the last resorts.
         var domain = Environment.GetEnvironmentVariable("USERDNSDOMAIN");
         if (string.IsNullOrWhiteSpace(domain))
             domain = IPGlobalProperties.GetIPGlobalProperties().DomainName;
@@ -95,20 +101,26 @@ public static class ComputerTarget
     }
 
     /// <summary>
-    /// True when the current user belongs to a domain rather than to a local account, which is
-    /// what makes the joined domain the right one to qualify computer names with.
+    /// The DNS name of the domain this computer is joined to, or an empty string when the
+    /// computer is not joined to a domain.
     /// </summary>
-    private static bool IsDomainJoined()
+    private static string GetActiveDirectoryDomain()
     {
         try
         {
-            var userDomain = Environment.UserDomainName;
-            return !string.IsNullOrWhiteSpace(userDomain)
-                && !userDomain.Equals(Environment.MachineName, StringComparison.OrdinalIgnoreCase);
+            // The lookup is normally answered from the local machine, but it can still block
+            // on a slow network, so it is given a moment to answer and then given up on.
+            var lookup = Task.Run(() =>
+            {
+                using var domain = Domain.GetComputerDomain();
+                return domain?.Name ?? string.Empty;
+            });
+
+            return lookup.Wait(DomainLookupTimeout) ? lookup.Result : string.Empty;
         }
         catch (Exception)
         {
-            return false;
+            return string.Empty;
         }
     }
 

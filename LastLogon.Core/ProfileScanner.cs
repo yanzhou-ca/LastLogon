@@ -206,10 +206,21 @@ public class ProfileScanner
 
     private static ProfileResult Failure(string computer, string user, Exception ex) => ex switch
     {
-        UnauthorizedAccessException => new(computer, user, null, null, ScanStatus.AccessDenied, "Access denied"),
+        UnauthorizedAccessException access => new(
+            computer, user, null, null, ScanStatus.AccessDenied, Describe(access)),
         TimeoutException => new(computer, user, null, null, ScanStatus.TimedOut, "Timed out"),
         DirectoryNotFoundException => new(computer, user, null, null, ScanStatus.Offline, "Offline or C$ unreachable"),
-        IOException => new(computer, user, null, null, ScanStatus.Offline, ex.Message),
+        IOException io => new(computer, user, null, null, ScanStatus.Offline, io.Message),
         _ => new(computer, user, null, null, ScanStatus.Error, ex.Message),
     };
+
+    /// <summary>
+    /// Keeps the reason a share could not be read, because "Access denied" on its own does not
+    /// say whether the computer is wrong, the share is missing or the token is filtered.
+    /// </summary>
+    private static string Describe(UnauthorizedAccessException exception)
+    {
+        var message = exception.Message.Trim();
+        return message.Length == 0 ? "Access denied" : "Access denied: " + message;
+    }
 }
