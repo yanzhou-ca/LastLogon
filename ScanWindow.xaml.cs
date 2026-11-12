@@ -137,6 +137,7 @@ public partial class ScanWindow : Window
         }
 
         UpdateScanControls();
+        UpdateComputerTargetHint();
     }
 
     private async void Scan_Click(object sender, RoutedEventArgs e) => await StartScanAsync();
@@ -205,7 +206,11 @@ public partial class ScanWindow : Window
             UpdateComputerTargetHint();
         }
 
-        if (sender == UsernameBox) UsernameErrorLabel.Visibility = Visibility.Collapsed;
+        if (sender == UsernameBox)
+        {
+            UsernameErrorLabel.Visibility = Visibility.Collapsed;
+            UpdateComputerTargetHint();
+        }
         if (sender == HistoryStartBox || sender == HistoryEndBox)
             HistoryTimeErrorLabel.Visibility = Visibility.Collapsed;
         if (_vm.StatusText.StartsWith("Computer name: ", StringComparison.Ordinal)
@@ -327,10 +332,19 @@ public partial class ScanWindow : Window
                         && domain.Length > 0
                         && ComputerTarget.AddressingMode == ComputerTarget.Addressing.DomainQualified;
 
+        // In By user mode the scan reads one known file instead of listing C:\Users, so the
+        // exact file is shown. That is the path to compare with a manual PowerShell check.
+        var byUser = LogonHistoryRadio.IsChecked != true && ByUserRadio.IsChecked == true;
+        var user = InputParser.NormalizeUsername(UsernameBox.Text);
+        var knownProfile = byUser && user.Length > 0 && InputParser.IsSafeProfileFolderName(user);
+
         ComputerTargetLabel.Text = computers.Count switch
         {
+            1 when knownProfile =>
+                $"Reads {ComputerTarget.UncPath(computers[0], "Users", user, "NTUSER.DAT")} directly, without listing C:\\Users",
             1 => $"Reads {ComputerTarget.UncPath(computers[0], "Users")}",
             0 => string.Empty,
+            _ when knownProfile => $"Reads {user}\\NTUSER.DAT on {computers.Count} computers",
             _ when qualified => $"Reads {computers.Count} computers in {domain}",
             _ when allShort => $"Reads {computers.Count} computers by short name",
             _ => $"Reads {computers.Count} computers as entered",
