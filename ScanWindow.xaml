@@ -96,6 +96,16 @@
                 <Button Content="Import .txt…" Click="Import_Click" Margin="0,0,8,0" />
                 <Button Content="From AD…" Click="FromAd_Click" />
             </StackPanel>
+            <Grid Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <Button x:Name="TestButton" Grid.Column="0" Content="Test connection" Click="Test_Click"
+                        ToolTip="Check whether the computer can be reached and which name reaches it" />
+                <TextBlock x:Name="ConnectionTestLabel" Grid.Column="1" Style="{StaticResource Caption}"
+                           Margin="8,0,0,0" VerticalAlignment="Center" TextWrapping="Wrap" />
+            </Grid>
             <StackPanel x:Name="HistoryPanel" Visibility="Collapsed" Margin="0,10,0,0">
                 <Grid>
                     <Grid.ColumnDefinitions>

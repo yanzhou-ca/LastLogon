@@ -211,6 +211,68 @@ public partial class ScanWindow : Window
             StatusLabel.Text = "Ready";
     }
 
+    /// <summary>
+    /// Checks whether the computer can be reached and reports which name reaches it. It is the
+    /// difference between a name that is wrong and a share that cannot be read.
+    /// </summary>
+    private async void Test_Click(object sender, RoutedEventArgs e)
+    {
+        IReadOnlyList<string> computers;
+        try
+        {
+            computers = InputParser.ParseComputers(ComputersBox.Text);
+        }
+        catch (FormatException)
+        {
+            ConnectionTestLabel.Text = "Enter a computer name first.";
+            return;
+        }
+
+        if (computers.Count != 1)
+        {
+            ConnectionTestLabel.Text = "Enter a single computer name to test it.";
+            return;
+        }
+
+        var computer = computers[0];
+        ConnectionTestLabel.Text = "Testing " + computer + "…";
+        TestButton.IsEnabled = false;
+        try
+        {
+            var result = await Task.Run(() => ConnectionTest.Run(computer, ComputerTarget.AddressingMode));
+            ConnectionTestLabel.Text = Describe(result);
+        }
+        catch (Exception ex)
+        {
+            ConnectionTestLabel.Text = "Test failed: " + ex.Message;
+        }
+        finally
+        {
+            TestButton.IsEnabled = true;
+        }
+    }
+
+    private static string Describe(ConnectionTestResult result)
+    {
+        var text = result.Succeeded
+            ? result.Summary
+            : result.Summary;
+
+        if (!string.IsNullOrEmpty(result.ResolvedAddress))
+            text += $" Resolves to {result.ResolvedAddress}.";
+
+        if (result.Attempts.Count > 1)
+        {
+            foreach (var attempt in result.Attempts)
+            {
+                var code = attempt.Win32Error is int error ? $" (Windows error {error})" : "";
+                text += $" [{attempt.AddressedAs}: {(attempt.Succeeded ? "reachable" : "failed" + code)}]";
+            }
+        }
+
+        return text;
+    }
+
     private void AddressingCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (AddressingCombo is null || AddressingCombo.SelectedIndex is not (0 or 1)) return;
