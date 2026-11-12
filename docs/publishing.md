@@ -15,9 +15,9 @@ carries the runtime as well, for a machine that does not have it.
 
 ```powershell
 # framework dependent, one file per platform
-dotnet publish LastLogon.csproj -c Release -p:Platform=x64
-dotnet publish LastLogon.csproj -c Release -p:Platform=x86
-dotnet publish LastLogon.csproj -c Release -p:Platform=ARM64
+dotnet publish LastLogon.csproj -c Release -p:Platform=x64 -r win-x64
+dotnet publish LastLogon.csproj -c Release -p:Platform=x86 -r win-x86
+dotnet publish LastLogon.csproj -c Release -p:Platform=ARM64 -r win-arm64
 
 # self contained, one file per platform
 dotnet publish LastLogon.csproj -c Release -p:PublishProfile=standalone-win-x64
@@ -26,6 +26,14 @@ dotnet publish LastLogon.csproj -c Release -p:PublishProfile=standalone-win-arm6
 ```
 
 The output lands in `publish\<runtime identifier>\` and `publish\<runtime identifier>-standalone\`.
+
+The publish profile is chosen by the runtime identifier, not by the platform. The project
+declares three runtime identifiers, and the build then uses a runtime specific output path
+(`bin\x64 win-x64[0]\`) to keep the builds apart; a profile name built from the platform
+would not exist there.
+
+Always name the profile explicitly for the self contained builds, because the name cannot be
+derived from the runtime identifier.
 
 ## Why the payload is what it is
 
