@@ -103,6 +103,25 @@ public class ProfileScannerTests
             "the message should name the account or say that the tool is not elevated: " + row.Message);
     }
 
+    [Theory]
+    [InlineData("pc01", "corp.example", ComputerTarget.Addressing.DomainQualified,
+        @"addressed as pc01.corp.example (domain-qualified)", "choose Short name")]
+    [InlineData("pc01", "corp.example", ComputerTarget.Addressing.ShortName,
+        "addressed by its short name (pc01)", null)]
+    [InlineData("pc01.other.example", "corp.example", ComputerTarget.Addressing.DomainQualified,
+        "entered as the fully qualified name pc01.other.example", "choose Short name")]
+    [InlineData("pc01", "", ComputerTarget.Addressing.DomainQualified,
+        "addressed by its short name (pc01) because no DNS domain could be determined", null)]
+    public void DescribeAddressing_SaysWhichNameTheFailedConnectionUsed(
+        string computer, string domain, ComputerTarget.Addressing addressing,
+        string expected, string? alsoExpected)
+    {
+        var text = ProfileScanner.DescribeAddressing(computer, domain, addressing);
+
+        Assert.Contains(expected, text);
+        if (alsoExpected is not null) Assert.Contains(alsoExpected, text);
+    }
+
     [Fact]
     public void RunContext_ReportsTheAccountAndTheElevation()
     {

@@ -272,14 +272,45 @@ public class ProfileScanner
         var reason = exception.Message.Trim();
         var reasonText = reason.Length == 0 ? "Access denied" : "Access denied: " + reason;
 
+        var addressed = DescribeAddressing(
+            computer, ComputerTarget.DnsDomain, ComputerTarget.AddressingMode);
+
         var guidance = RunContext.IsElevated
             ? $"The account {RunContext.Account} has to be an administrator on {computer}, "
-              + "and the C$ share has to be enabled there. If the computer is reached under a "
-              + "different name, address it by its short name or by its full name. If the "
-              + "folder can be read but not listed, use By user with the exact profile folder name."
+              + "and the C$ share has to be enabled there. If the folder can be read but not "
+              + "listed, use By user with the exact profile folder name."
             : "The tool is not running elevated, so the administrative share (C$) of another "
               + "computer is refused. Start it with Run as administrator.";
 
-        return reasonText + " " + guidance;
+        return reasonText + " " + addressed + " " + guidance;
+    }
+
+    /// <summary>
+    /// Says which name the failed connection used, because a name that reaches one machine does
+    /// not have to reach the machine that owns the profile.
+    /// </summary>
+    internal static string DescribeAddressing(
+        string computer, string? dnsDomain, ComputerTarget.Addressing addressing)
+    {
+        if (!InputParser.IsShortComputerName(computer))
+        {
+            return $"The computer was entered as the fully qualified name {computer}. If the "
+                   + "short name is the one that works, enter only the first label and choose "
+                   + "Short name.";
+        }
+
+        if (addressing == ComputerTarget.Addressing.ShortName)
+            return $"The computer was addressed by its short name ({computer}).";
+
+        var qualified = ComputerTarget.Qualify(
+            computer, dnsDomain, ComputerTarget.Addressing.DomainQualified);
+        if (qualified.Equals(computer, StringComparison.OrdinalIgnoreCase))
+        {
+            return $"The computer was addressed by its short name ({computer}) because no DNS "
+                   + "domain could be determined.";
+        }
+
+        return $"The computer was addressed as {qualified} (domain-qualified). If the short "
+               + "name is the one that works, choose Short name.";
     }
 }
