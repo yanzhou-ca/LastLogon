@@ -213,7 +213,8 @@ public partial class ScanWindow : Window
 
     /// <summary>
     /// Shows which host the scan will actually talk to, so that a name that resolves to the
-    /// wrong machine is visible before the scan runs.
+    /// wrong machine is visible before the scan runs, together with the account and rights the
+    /// scan will use.
     /// </summary>
     private void UpdateComputerTargetHint()
     {
@@ -236,6 +237,12 @@ public partial class ScanWindow : Window
             0 => string.Empty,
             _ => $"Reads {computers.Count} computers in {ComputerTarget.DnsDomain}",
         };
+
+        if (RunContextLabel is null) return;
+        RunContextLabel.Text = RunContext.IsElevated
+            ? $"Running as {RunContext.Account}, elevated."
+            : $"Running as {RunContext.Account} without administrator rights - the administrative "
+              + "share (C$) of another computer will be refused.";
     }
 
     /// <summary>True when the process holds the full administrator token.</summary>

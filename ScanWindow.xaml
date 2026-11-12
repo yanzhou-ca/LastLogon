@@ -75,6 +75,8 @@
                      PreviewKeyDown="LookupInput_PreviewKeyDown" />
             <TextBlock x:Name="ComputerTargetLabel" Style="{StaticResource Caption}"
                        Margin="0,2,0,0" TextWrapping="Wrap" />
+            <TextBlock x:Name="RunContextLabel" Style="{StaticResource Caption}"
+                       Margin="0,2,0,0" TextWrapping="Wrap" />
             <TextBlock x:Name="ComputersErrorLabel" Style="{StaticResource ValidationMessage}"
                        Visibility="Collapsed" />
             <StackPanel x:Name="ListButtons" Orientation="Horizontal" Visibility="Collapsed" Margin="0,8,0,0">

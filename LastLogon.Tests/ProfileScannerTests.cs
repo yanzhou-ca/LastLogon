@@ -89,6 +89,19 @@ public class ProfileScannerTests
         var row = Assert.Single(r);
         Assert.Equal(ScanStatus.AccessDenied, row.Status);
         Assert.Contains("corp.example", row.Message);
+
+        // The message has to say what is needed to read the share, not only that it was refused.
+        Assert.True(
+            row.Message!.Contains(RunContext.Account, StringComparison.OrdinalIgnoreCase)
+            || row.Message.Contains("not running elevated", StringComparison.OrdinalIgnoreCase),
+            "the message should name the account or say that the tool is not elevated: " + row.Message);
+    }
+
+    [Fact]
+    public void RunContext_ReportsTheAccountAndTheElevation()
+    {
+        Assert.False(string.IsNullOrWhiteSpace(RunContext.Account));
+        Assert.Contains(RunContext.Account, RunContext.Account);
     }
 
     [Fact]

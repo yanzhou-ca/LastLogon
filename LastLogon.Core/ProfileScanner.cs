@@ -207,7 +207,7 @@ public class ProfileScanner
     private static ProfileResult Failure(string computer, string user, Exception ex) => ex switch
     {
         UnauthorizedAccessException access => new(
-            computer, user, null, null, ScanStatus.AccessDenied, Describe(access)),
+            computer, user, null, null, ScanStatus.AccessDenied, Describe(access, computer)),
         TimeoutException => new(computer, user, null, null, ScanStatus.TimedOut, "Timed out"),
         DirectoryNotFoundException => new(computer, user, null, null, ScanStatus.Offline, "Offline or C$ unreachable"),
         IOException io => new(computer, user, null, null, ScanStatus.Offline, io.Message),
@@ -215,12 +215,21 @@ public class ProfileScanner
     };
 
     /// <summary>
-    /// Keeps the reason a share could not be read, because "Access denied" on its own does not
-    /// say whether the computer is wrong, the share is missing or the token is filtered.
+    /// Keeps the reason a share could not be read and says what is needed to read it, because
+    /// "Access denied" on its own does not say whether the tool is filtered, the account is not
+    /// an administrator on the target or the share has been turned off.
     /// </summary>
-    private static string Describe(UnauthorizedAccessException exception)
+    private static string Describe(UnauthorizedAccessException exception, string computer)
     {
-        var message = exception.Message.Trim();
-        return message.Length == 0 ? "Access denied" : "Access denied: " + message;
+        var reason = exception.Message.Trim();
+        var reasonText = reason.Length == 0 ? "Access denied" : "Access denied: " + reason;
+
+        var guidance = RunContext.IsElevated
+            ? $"The account {RunContext.Account} has to be an administrator on {computer}, "
+              + "and the C$ share has to be enabled there."
+            : "The tool is not running elevated, so the administrative share (C$) of another "
+              + "computer is refused. Start it with Run as administrator.";
+
+        return reasonText + " " + guidance;
     }
 }
