@@ -161,6 +161,12 @@ public class ProfileScanner
         {
             var result = await RunWithTimeout(() =>
             {
+                // A known profile folder can be read without listing C:\Users. Some estates
+                // deny the listing but allow reading a known profile, and the by-user lookup
+                // already knows the folder name it is looking for.
+                var direct = TryReadKnownProfile(computer, username);
+                if (direct is not null) return direct;
+
                 var folders = _fs.ListUserFolders(computer);
                 var match = folders.FirstOrDefault(f => f.Equals(username, StringComparison.OrdinalIgnoreCase))
                     ?? folders.FirstOrDefault(f => f.StartsWith(username + ".", StringComparison.OrdinalIgnoreCase));
@@ -176,6 +182,35 @@ public class ProfileScanner
         {
             return new ScanOutcome<ProfileResult>(new[] { Failure(computer, username, ex) }, pending);
         }
+    }
+
+    /// <summary>
+    /// Reads the profile folder the operator named, without listing C:\Users. Null when the
+    /// folder has no NTUSER.DAT, so that a folder with a domain suffix can still be found by
+    /// the listing.
+    /// </summary>
+    private ProfileResult? TryReadKnownProfile(string computer, string username)
+    {
+        if (!InputParser.IsSafeProfileFolderName(username)) return null;
+
+        DateTime? time;
+        try
+        {
+            time = _fs.GetNtUserDatTime(computer, username);
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // The listing may still be allowed; let it report the real reason if it is not.
+            return null;
+        }
+        catch (IOException)
+        {
+            return null;
+        }
+
+        return time is null
+            ? null
+            : new ProfileResult(computer, username, time, ActivitySource.NtUserDat, ScanStatus.Ok, null);
     }
 
     private ProfileResult ReadProfile(string computer, string folder)
@@ -227,7 +262,8 @@ public class ProfileScanner
         var guidance = RunContext.IsElevated
             ? $"The account {RunContext.Account} has to be an administrator on {computer}, "
               + "and the C$ share has to be enabled there. If the computer is reached under a "
-              + "different name, address it by its short name or by its full name."
+              + "different name, address it by its short name or by its full name. If the "
+              + "folder can be read but not listed, use By user with the exact profile folder name."
             : "The tool is not running elevated, so the administrative share (C$) of another "
               + "computer is refused. Start it with Run as administrator.";
 

@@ -194,9 +194,33 @@ public static class ConnectionTest
                 $"{folders.Length} profile folder(s) readable.",
                 null);
         }
+        catch (UnauthorizedAccessException ex) when (CanReadAttributes(path))
+        {
+            // The folder itself can be opened, so the share and the account are fine; only the
+            // listing is refused. A known profile can still be read directly.
+            return new ConnectionAttempt(
+                address,
+                false,
+                "The Users folder exists but its contents cannot be listed. Known profile files "
+                + "can still be read; use By user with the exact profile folder name.",
+                ErrorCode(ex));
+        }
         catch (Exception ex)
         {
             return new ConnectionAttempt(address, false, Readable(ex.Message), ErrorCode(ex));
+        }
+    }
+
+    private static bool CanReadAttributes(string path)
+    {
+        try
+        {
+            File.GetAttributes(path);
+            return true;
+        }
+        catch (Exception)
+        {
+            return false;
         }
     }
 

@@ -129,6 +129,21 @@ public class ProfileScannerTests
     }
 
     [Fact]
+    public async Task FindUser_ReadsAKnownProfileWithoutListingTheUsersFolder()
+    {
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("listing is denied");
+        var list = new List<ProfileResult>();
+        await foreach (var r in new ProfileScanner(fs).FindUserAsync("alice", new[] { "pc1" }, default))
+            list.Add(r);
+
+        var row = Assert.Single(list);
+        Assert.Equal(ScanStatus.Ok, row.Status);
+        Assert.Equal("alice", row.Username);
+        Assert.Equal(ActivitySource.NtUserDat, row.Source);
+    }
+
+    [Fact]
     public async Task FindUser_RespectsMaxParallel()
     {
         var fs = Basic(); fs.Delay = TimeSpan.FromMilliseconds(50);
