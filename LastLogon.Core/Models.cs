@@ -17,5 +17,11 @@ public record ProfileResult(
     public string LastActivityText => LastActivity?.ToString("yyyy-MM-dd HH:mm") ?? "";
     public string DaysAgoText => DaysAgo?.ToString() ?? "";
     public string SourceText => Source?.ToString() ?? "";
+
+    /// <summary>
+    /// True when the row names a profile folder that may exist, so that Explorer can be pointed
+    /// at it. A computer that was reached but has no profile for the user has no such folder.
+    /// </summary>
+    public bool CanOpenFolder => Status != ScanStatus.NoProfile && !string.IsNullOrEmpty(Username);
     public string StatusText => Message is null ? Status.ToString() : $"{Status}: {Message}";
 }

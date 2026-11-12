@@ -50,7 +50,7 @@ Exact stale threshold UI, timeout values, grid control choice, and the UI layout
 ## Modes (from the user's answer, 2026-11-10 15:28)
 Typical use: one user at a time. Two lookups, same scanner, same grid:
 1. **By computer**: list all recently active usernames on a PC, most recent first.
-2. **By user**: find which computers a user recently logged into, most recent first. This scans a computer list, checking `\\PC\C$\Users\<user>\NTUSER.DAT` on each, and lists only PCs where the profile exists. The scan streams results as each PC responds.
+2. **By user**: find which computers a user recently logged into, most recent first. This scans a computer list, checking `\\PC\C$\Users\<user>\NTUSER.DAT` on each, and lists only PCs where the profile exists. *(Amended 2026-11-12: every computer that is checked now gets a row. A reached computer without the profile shows `NoProfile`, and the status line says how many computers were checked, how many had the profile, how many did not and how many could not be checked, so that "looked and found nothing" is not mistaken for "never looked".)* The scan streams results as each PC responds.
 
 ## Approval and environment (2026-11-10 15:30)
 Design approved by the user. Environment assumption from the user: the tool runs on a domain-joined computer with an AD admin account already signed in. So:

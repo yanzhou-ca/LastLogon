@@ -43,10 +43,7 @@ public class ProfileScanner
     /// The outcome of scanning one computer, together with any work that is still running in the
     /// background because the remote call could not be interrupted.
     /// </summary>
-    private sealed record ScanOutcome<T>(IReadOnlyList<T> Results, Task? PendingWork)
-    {
-        public static ScanOutcome<T> Empty { get; } = new(Array.Empty<T>(), null);
-    }
+    private sealed record ScanOutcome<T>(IReadOnlyList<T> Results, Task? PendingWork);
 
     private async Task<ScanOutcome<ProfileResult>> ScanComputerWithOutcomeAsync(string computer, CancellationToken ct)
     {
@@ -210,17 +207,25 @@ public class ProfileScanner
                     var folders = _fs.ListUserFolders(computer);
                     var match = folders.FirstOrDefault(f => f.Equals(username, StringComparison.OrdinalIgnoreCase))
                         ?? folders.FirstOrDefault(f => f.StartsWith(username + ".", StringComparison.OrdinalIgnoreCase));
-                    return match is null ? null : ReadProfile(computer, match);
+
+                    // A computer that was reached and has no such profile still gets a row, so
+                    // that "looked and found nothing" is not mistaken for "never looked".
+                    return match is null ? NoProfile(computer, username) : ReadProfile(computer, match);
                 }
-                catch when (directError is not null)
+                catch (Exception) when (directError is not null)
                 {
                     throw directError;
                 }
+                catch (UnauthorizedAccessException)
+                {
+                    // The exact folder name was looked for and is not there, and the listing is
+                    // refused. The computer answered, so this is not a rights problem to report
+                    // as one: it is a search that could only be made halfway.
+                    return NoProfileThatCouldNotBeSearched(computer, username);
+                }
             }, ct, task => pending = task);
 
-            return result is null
-                ? ScanOutcome<ProfileResult>.Empty
-                : new ScanOutcome<ProfileResult>(new[] { result }, null);
+            return new ScanOutcome<ProfileResult>(new[] { result }, null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
@@ -316,6 +321,31 @@ public class ProfileScanner
             TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
         throw new TimeoutException("Timed out");
     }
+
+    /// <summary>The row for a reached computer that has no profile for the user that was asked for.</summary>
+    private static ProfileResult NoProfile(string computer, string username)
+        => new(
+            computer,
+            username,
+            null,
+            null,
+            ScanStatus.NoProfile,
+            $"No profile folder for {username} was found on this computer.");
+
+    /// <summary>
+    /// The row for a reached computer where no folder with the exact name was found and the folder
+    /// of all profiles cannot be listed, so a folder with a suffix could not be looked for.
+    /// </summary>
+    private static ProfileResult NoProfileThatCouldNotBeSearched(string computer, string username)
+        => new(
+            computer,
+            username,
+            null,
+            null,
+            ScanStatus.NoProfile,
+            $"No NTUSER.DAT was found in a folder named exactly {username}. C:\\Users cannot be listed "
+            + $"with this account, so a folder with a suffix (for example {username}.DOMAIN) could not "
+            + "be looked for.");
 
     /// <summary>
     /// The row for one profile folder that could not be read while the others could. It keeps the

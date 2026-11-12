@@ -454,8 +454,7 @@ public partial class ScanWindow : Window
         => UpdateOpenFolderButton();
 
     private void UpdateOpenFolderButton()
-        => OpenFolderButton.IsEnabled = ResultsList.SelectedItem is ProfileResult r
-            && !string.IsNullOrEmpty(r.Username);
+        => OpenFolderButton.IsEnabled = ResultsList.SelectedItem is ProfileResult { CanOpenFolder: true };
 
     private void Cancel_Click(object sender, RoutedEventArgs e)
     {
@@ -566,7 +565,7 @@ public partial class ScanWindow : Window
 
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
     {
-        if (ResultsList.SelectedItem is not ProfileResult r || string.IsNullOrEmpty(r.Username)) return;
+        if (ResultsList.SelectedItem is not ProfileResult { CanOpenFolder: true } r) return;
 
         // The folder name comes from the scanned computer, and the computer name from the
         // operator. Neither may be able to escape the path or the command line.

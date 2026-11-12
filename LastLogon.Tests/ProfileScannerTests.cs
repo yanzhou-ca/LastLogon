@@ -307,8 +307,10 @@ public class ProfileScannerTests
         Assert.Equal(0, probed);
     }
 
+    // Every computer that is checked gets a row, so that "looked and found nothing" can be told
+    // from "never looked". Before, a computer without the profile was left out silently.
     [Fact]
-    public async Task FindUser_ReturnsOnlyComputersWithProfile_IncludingErrors()
+    public async Task FindUser_ReportsEveryComputer_WithTheProfileWithoutItAndUnreachable()
     {
         var fs = Basic();
         fs.Folders["pc2"] = new() { "zed" };
@@ -316,8 +318,57 @@ public class ProfileScannerTests
         var list = new List<ProfileResult>();
         await foreach (var r in new ProfileScanner(fs).FindUserAsync("alice", new[] { "pc1", "pc2", "pc3" }, default))
             list.Add(r);
-        Assert.Equal(new[] { "pc1", "pc3" }, list.Select(x => x.Computer).OrderBy(x => x));
+
+        Assert.Equal(new[] { "pc1", "pc2", "pc3" }, list.Select(x => x.Computer).OrderBy(x => x));
+        Assert.Equal(ScanStatus.Ok, list.Single(x => x.Computer == "pc1").Status);
         Assert.Equal(ScanStatus.Offline, list.Single(x => x.Computer == "pc3").Status);
+
+        var none = list.Single(x => x.Computer == "pc2");
+        Assert.Equal(ScanStatus.NoProfile, none.Status);
+        Assert.Equal("alice", none.Username);
+        Assert.Null(none.LastActivity);
+        Assert.Contains("alice", none.Message);
+    }
+
+    // The listing is refused, but the exact folder name was looked for and is not there. That is
+    // not a rights problem on the computer, and the row must not say that it is: it says what was
+    // looked for and what could not be looked for.
+    [Fact]
+    public async Task FindUser_ListingRefusedAndNoFolderWithTheExactName_ReportsNoProfileAndSaysWhatCouldNotBeChecked()
+    {
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("listing is denied");
+        var probed = 0;
+        var scanner = new ProfileScanner(fs, connectionProbe: _ =>
+        {
+            Interlocked.Increment(ref probed);
+            return TwoNamesTwoComputers();
+        });
+
+        var list = new List<ProfileResult>();
+        await foreach (var r in scanner.FindUserAsync("ghost", new[] { "pc1" }, default)) list.Add(r);
+
+        var row = Assert.Single(list);
+        Assert.Equal(ScanStatus.NoProfile, row.Status);
+        Assert.Equal("ghost", row.Username);
+        Assert.Contains("named exactly", row.Message);
+        Assert.Contains("ghost.", row.Message);                       // the suffix that could not be looked for
+        Assert.DoesNotContain("has to be an administrator", row.Message);
+        Assert.Equal(0, probed);                                      // the computer answered; nothing to look into
+    }
+
+    [Fact]
+    public async Task FindUser_ListingRefusedAndAnotherFileRefused_StillReportsAccessDenied()
+    {
+        // The exact profile exists but cannot be read, so this is an access problem after all.
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("listing is denied");
+        fs.FailNtUser = (_, _) => new UnauthorizedAccessException("file is denied");
+
+        var list = new List<ProfileResult>();
+        await foreach (var r in new ProfileScanner(fs).FindUserAsync("alice", new[] { "pc1" }, default)) list.Add(r);
+
+        Assert.Equal(ScanStatus.AccessDenied, Assert.Single(list).Status);
     }
 
     [Fact]

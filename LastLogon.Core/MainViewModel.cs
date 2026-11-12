@@ -73,6 +73,8 @@ public class MainViewModel : INotifyPropertyChanged
         // anything once it has been replaced: the state belongs to the scan that is current.
         _cts?.Cancel();
         var generation = ++_scanGeneration;
+        var mode = Mode;
+        var total = computers.Count;
         Results.Clear();
         var cts = new CancellationTokenSource();
         _cts = cts;
@@ -87,7 +89,7 @@ public class MainViewModel : INotifyPropertyChanged
 
         try
         {
-            if (Mode == LookupMode.ByComputer)
+            if (mode == LookupMode.ByComputer)
             {
                 await foreach (var r in _scanner.ScanComputersAsync(computers, ct))
                     Add(r);
@@ -98,12 +100,12 @@ public class MainViewModel : INotifyPropertyChanged
                     Add(r);
             }
             if (generation == _scanGeneration)
-                StatusText = ct.IsCancellationRequested ? $"Cancelled. {Results.Count} result(s)." : $"Done. {Results.Count} result(s).";
+                StatusText = Summarize(mode, total, cancelled: ct.IsCancellationRequested);
         }
         catch (OperationCanceledException)
         {
             if (generation == _scanGeneration)
-                StatusText = $"Cancelled. {Results.Count} result(s).";
+                StatusText = Summarize(mode, total, cancelled: true);
         }
         catch (Exception ex)
         {
@@ -122,6 +124,25 @@ public class MainViewModel : INotifyPropertyChanged
             // is still the current one.
             cts.Dispose();
         }
+    }
+
+    /// <summary>
+    /// The status line at the end of a scan. By user says how many computers were checked and what
+    /// was found on them, because a result list alone cannot say whether a computer was looked at.
+    /// The line keeps starting with "Done." or "Cancelled.", which the window relies on.
+    /// </summary>
+    private string Summarize(LookupMode mode, int total, bool cancelled)
+    {
+        var outcome = cancelled ? "Cancelled" : "Done";
+        if (mode == LookupMode.ByComputer) return $"{outcome}. {Results.Count} result(s).";
+
+        var withProfile = Results.Count(r => r.Status == ScanStatus.Ok);
+        var without = Results.Count(r => r.Status == ScanStatus.NoProfile);
+        var notChecked = Results.Count - withProfile - without;
+        var checkedText = cancelled ? $"{Results.Count} of {total}" : $"{Results.Count}";
+
+        return $"{outcome}. {checkedText} computer(s) checked: {withProfile} with a profile, "
+               + $"{without} without, {notChecked} could not be checked.";
     }
 
     public async Task LoadFromAdAsync(string prefix, string? ou)

@@ -102,6 +102,7 @@ public class MainViewModelTests
         await scan;
         Assert.InRange(vm.Results.Count, 1, 29);
         Assert.False(vm.IsScanning);
+        Assert.Matches(@"^Cancelled\. \d+ of 30 computer\(s\) checked: ", vm.StatusText);
     }
 
     // D-01: a scan started while another one runs replaces it. The replaced scan unwinding must
@@ -126,6 +127,47 @@ public class MainViewModelTests
         Assert.False(vm.IsScanning);
         Assert.StartsWith("Done.", vm.StatusText);
         Assert.Equal(new[] { "pc2" }, vm.Results.Select(r => r.Computer));
+    }
+
+    // By user says how many computers were checked and what was found, so that "0 results" can no
+    // longer mean either "nobody has the profile" or "nothing was looked at".
+    [Fact]
+    public async Task Scan_ByUser_SaysHowManyComputersWereCheckedAndWhatWasFound()
+    {
+        var (vm, fs) = Make();
+        fs.Folders["pc3"] = new() { "bob" };
+        fs.NtUser["pc3|bob"] = new DateTime(2025, 1, 1);
+        fs.Fail = c => c == "pc4" ? new DirectoryNotFoundException() : null;
+
+        vm.Mode = LookupMode.ByUser; vm.Username = "alice"; vm.ComputersText = "pc1 pc2 pc3 pc4";
+        await vm.ScanAsync();
+
+        Assert.Equal(4, vm.Results.Count);
+        Assert.Equal(
+            "Done. 4 computer(s) checked: 2 with a profile, 1 without, 1 could not be checked.",
+            vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Scan_ByUser_NobodyHasTheProfile_StillShowsOneRowPerComputer()
+    {
+        var (vm, _) = Make();
+        vm.Mode = LookupMode.ByUser; vm.Username = "ghost"; vm.ComputersText = "pc1 pc2";
+        await vm.ScanAsync();
+
+        Assert.All(vm.Results, r => Assert.Equal(ScanStatus.NoProfile, r.Status));
+        Assert.Equal(new[] { "pc1", "pc2" }, vm.Results.Select(r => r.Computer).OrderBy(c => c));
+        Assert.Equal("Done. 2 computer(s) checked: 0 with a profile, 2 without, 0 could not be checked.", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Scan_ByComputer_KeepsTheResultCountStatus()
+    {
+        var (vm, _) = Make();
+        vm.ComputersText = "pc1";
+        await vm.ScanAsync();
+
+        Assert.Equal("Done. 2 result(s).", vm.StatusText);
     }
 
     [Fact]
