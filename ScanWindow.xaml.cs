@@ -21,7 +21,6 @@ public partial class ScanWindow : Window
     private readonly MainViewModel _vm;
     private readonly LogonHistoryViewModel _historyVm;
     private bool _hasCompletedScan;
-    private int _connectionTestGeneration;
     private const string LocalDateTimeFormat = "yyyy-MM-dd HH:mm";
 
     public ScanWindow()
@@ -32,9 +31,9 @@ public partial class ScanWindow : Window
             else Dispatcher.BeginInvoke(action);
         };
 
-        // A computer that answers "access denied" is looked into with the same test as the Test
-        // connection button, using the addressing the operator selected, so that the row says
-        // which address each name reaches.
+        // A computer that answers "access denied" is looked into with a connection test, using
+        // the addressing the operator selected, so that the row says which address each name
+        // reaches.
         _vm = new MainViewModel(
             new ProfileScanner(
                 new SmbProfileFileSystem(),
@@ -211,7 +210,6 @@ public partial class ScanWindow : Window
         if (sender == ComputersBox)
         {
             ComputersErrorLabel.Visibility = Visibility.Collapsed;
-            ClearConnectionTest();
             UpdateComputerTargetHint();
         }
 
@@ -227,75 +225,6 @@ public partial class ScanWindow : Window
             StatusLabel.Text = "Ready";
     }
 
-    /// <summary>
-    /// Checks whether the computer can be reached and reports which name reaches it. It is the
-    /// difference between a name that is wrong and a share that cannot be read.
-    /// </summary>
-    private async void Test_Click(object sender, RoutedEventArgs e)
-    {
-        IReadOnlyList<string> computers;
-        try
-        {
-            computers = InputParser.ParseComputers(ComputersBox.Text);
-        }
-        catch (FormatException)
-        {
-            ConnectionTestLabel.Text = "Enter a computer name first.";
-            return;
-        }
-
-        if (computers.Count != 1)
-        {
-            ConnectionTestLabel.Text = "Enter a single computer name to test it.";
-            return;
-        }
-
-        var computer = computers[0];
-        var generation = ++_connectionTestGeneration;
-        ConnectionTestLabel.Text = "Testing " + computer + "…";
-        TestButton.IsEnabled = false;
-        try
-        {
-            var result = await Task.Run(() => ConnectionTest.Run(computer, ComputerTarget.AddressingMode));
-            if (generation == _connectionTestGeneration)
-                ConnectionTestLabel.Text = Describe(result);
-        }
-        catch (Exception ex)
-        {
-            if (generation == _connectionTestGeneration)
-                ConnectionTestLabel.Text = "Test failed: " + ex.Message;
-        }
-        finally
-        {
-            TestButton.IsEnabled = true;
-        }
-    }
-
-    /// <summary>
-    /// Drops a test result that no longer describes the input, so that a result for the
-    /// previous computer is not mistaken for the current one.
-    /// </summary>
-    private void ClearConnectionTest()
-    {
-        _connectionTestGeneration++;
-        if (ConnectionTestLabel is not null) ConnectionTestLabel.Text = string.Empty;
-    }
-
-    private static string Describe(ConnectionTestResult result)
-    {
-        var text = result.Summary;
-
-        // With two names the report lists the address of each, which is the same text a denied
-        // scan row shows. With one name there is nothing to compare, so the address is enough.
-        if (result.Attempts.Count > 1)
-            return text + " " + result.DescribeAttempts();
-
-        if (!string.IsNullOrEmpty(result.ResolvedAddress))
-            text += $" Resolves to {result.ResolvedAddress}.";
-
-        return text;
-    }
-
     private void AddressingCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
         if (AddressingCombo is null || AddressingCombo.SelectedIndex is not (0 or 1)) return;
@@ -304,7 +233,6 @@ public partial class ScanWindow : Window
             ? ComputerTarget.Addressing.ShortName
             : ComputerTarget.Addressing.DomainQualified;
 
-        ClearConnectionTest();
         UpdateComputerTargetHint();
     }
 
