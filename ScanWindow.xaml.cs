@@ -338,11 +338,26 @@ public partial class ScanWindow : Window
         var user = InputParser.NormalizeUsername(UsernameBox.Text);
         var knownProfile = byUser && user.Length > 0 && InputParser.IsSafeProfileFolderName(user);
 
+        // Naming the mode here makes it visible when the path still contains a domain that the
+        // operator did not want. A name that was entered fully qualified is used as it is.
+        var singleMode = string.Empty;
+        if (computers.Count == 1)
+        {
+            if (!InputParser.IsShortComputerName(computers[0]))
+                singleMode = "entered as a fully qualified name";
+            else if (ComputerTarget.AddressingMode == ComputerTarget.Addressing.ShortName)
+                singleMode = "short name";
+            else if (ComputerTarget.IsValidDnsDomain(domain))
+                singleMode = "domain-qualified name";
+            else
+                singleMode = "domain-qualified name, but no DNS domain was found";
+        }
+
         ComputerTargetLabel.Text = computers.Count switch
         {
             1 when knownProfile =>
-                $"Reads {ComputerTarget.UncPath(computers[0], "Users", user, "NTUSER.DAT")} directly, without listing C:\\Users",
-            1 => $"Reads {ComputerTarget.UncPath(computers[0], "Users")}",
+                $"Reads {ComputerTarget.UncPath(computers[0], "Users", user, "NTUSER.DAT")} directly, without listing C:\\Users ({singleMode})",
+            1 => $"Reads {ComputerTarget.UncPath(computers[0], "Users")} ({singleMode})",
             0 => string.Empty,
             _ when knownProfile => $"Reads {user}\\NTUSER.DAT on {computers.Count} computers",
             _ when qualified => $"Reads {computers.Count} computers in {domain}",
