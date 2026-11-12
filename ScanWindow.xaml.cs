@@ -119,8 +119,8 @@ public partial class ScanWindow : Window
         StaleSettingsPanel.Visibility = history ? Visibility.Collapsed : Visibility.Visible;
         OpenFolderButton.Visibility = history ? Visibility.Collapsed : Visibility.Visible;
         ComputersLabel.Text = history || byUser
-            ? "Computers (short names, one per line, comma or space separated)"
-            : "Computer name (short name)";
+            ? "Computers (short or full names, one per line, comma or space separated)"
+            : "Computer name (short or full name)";
         if (UsernameErrorLabel is not null) UsernameErrorLabel.Visibility = Visibility.Collapsed;
         if (ComputersErrorLabel is not null) ComputersErrorLabel.Visibility = Visibility.Collapsed;
         if (history)
@@ -209,6 +209,17 @@ public partial class ScanWindow : Window
         if (_vm.StatusText.StartsWith("Computer name: ", StringComparison.Ordinal)
             || _vm.StatusText.StartsWith("Username: ", StringComparison.Ordinal))
             StatusLabel.Text = "Ready";
+    }
+
+    private void AddressingCombo_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (AddressingCombo is null || AddressingCombo.SelectedIndex is not (0 or 1)) return;
+
+        ComputerTarget.AddressingMode = AddressingCombo.SelectedIndex == 1
+            ? ComputerTarget.Addressing.ShortName
+            : ComputerTarget.Addressing.DomainQualified;
+
+        UpdateComputerTargetHint();
     }
 
     /// <summary>

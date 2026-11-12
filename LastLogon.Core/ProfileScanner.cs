@@ -226,7 +226,8 @@ public class ProfileScanner
 
         var guidance = RunContext.IsElevated
             ? $"The account {RunContext.Account} has to be an administrator on {computer}, "
-              + "and the C$ share has to be enabled there."
+              + "and the C$ share has to be enabled there. If the computer is reached under a "
+              + "different name, address it by its short name or by its full name."
             : "The tool is not running elevated, so the administrative share (C$) of another "
               + "computer is refused. Start it with Run as administrator.";
 

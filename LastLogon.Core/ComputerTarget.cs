@@ -17,10 +17,39 @@ namespace LastLogon.Core;
 /// </summary>
 public static class ComputerTarget
 {
+    /// <summary>How a short computer name is turned into the name that is connected to.</summary>
+    public enum Addressing
+    {
+        /// <summary>
+        /// The name is completed with the domain of this computer. The result is unambiguous and
+        /// cannot be redirected by a name answer on the network.
+        /// </summary>
+        DomainQualified,
+
+        /// <summary>
+        /// The name is used as it is and resolved the way Windows resolves a short name. Some
+        /// estates need this because the DNS name of a computer is not the short name with the
+        /// domain of the operator's computer.
+        /// </summary>
+        ShortName,
+    }
+
     /// <summary>How long the domain lookup may take before the machine's own DNS suffix is used.</summary>
     private static readonly TimeSpan DomainLookupTimeout = TimeSpan.FromSeconds(3);
 
     private static string? _dnsDomain;
+    private static Addressing _addressing = Addressing.DomainQualified;
+
+    /// <summary>
+    /// How a short computer name is turned into the name that is connected to. It is a setting
+    /// of the running application, because the operator chooses it and every network path in
+    /// the tool has to use the same one.
+    /// </summary>
+    public static Addressing AddressingMode
+    {
+        get => _addressing;
+        set => _addressing = value;
+    }
 
     /// <summary>
     /// The DNS domain used to qualify short computer names.
@@ -36,13 +65,16 @@ public static class ComputerTarget
     }
 
     /// <summary>
-    /// Qualifies <paramref name="computer"/> with the current DNS domain when one is known.
-    /// The bare name is returned when no usable domain is available, which keeps the caller
-    /// working on a machine that is not joined to a domain.
+    /// Qualifies <paramref name="computer"/> for a connection. A name that already carries a
+    /// domain is used as it is, a short name is completed with the current DNS domain unless
+    /// the operator asked for the short name.
     /// </summary>
     public static string Qualify(string computer, string? dnsDomain = null)
     {
         var name = (computer ?? "").Trim();
+        if (name.Contains('.')) return name;
+        if (_addressing == Addressing.ShortName) return name;
+
         var domain = dnsDomain ?? DnsDomain;
         return IsValidDnsDomain(domain) ? $"{name}.{domain}" : name;
     }

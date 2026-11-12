@@ -16,12 +16,36 @@ public class SmbProfileFileSystemTests
 
     [Theory]
     [InlineData(@"\\attacker\share")]
-    [InlineData("pc01.corp.example")]
     [InlineData("attacker:445")]
+    [InlineData("pc01/../pc02")]
     public void Root_RejectsComputerPathAndDomainSyntax(string computer)
     {
         WithDnsDomain("corp.example", () =>
             Assert.Throws<FormatException>(() => InvokeRoot(computer)));
+    }
+
+    [Fact]
+    public void Root_UsesAFullyQualifiedNameAsItIs()
+    {
+        WithDnsDomain("corp.example", () =>
+            Assert.Equal(@"\\pc01.other.example\C$\Users", InvokeRoot("pc01.other.example")));
+    }
+
+    [Fact]
+    public void Root_UsesTheShortNameWhenTheOperatorAsksForIt()
+    {
+        WithDnsDomain("corp.example", () =>
+        {
+            ComputerTarget.AddressingMode = ComputerTarget.Addressing.ShortName;
+            try
+            {
+                Assert.Equal(@"\\pc01\C$\Users", InvokeRoot("pc01"));
+            }
+            finally
+            {
+                ComputerTarget.AddressingMode = ComputerTarget.Addressing.DomainQualified;
+            }
+        });
     }
 
     [Fact]

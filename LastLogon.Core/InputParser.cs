@@ -18,15 +18,32 @@ public static class InputParser
     }
 
     /// <summary>
-    /// True when the name is a short host name. The name may not contain a dot, a separator or a
-    /// port, so it can only ever address a host in the operator's own DNS domain.
+    /// True when the name is a plain host name. One label is a short host name, several labels
+    /// are a fully qualified name. Separators, ports and wildcards are not allowed, so the name
+    /// can only ever address a host and never a path or a different kind of target.
     /// </summary>
     public static bool IsValidComputerName(string name)
     {
-        if (name.Length is 0 or > 63) return false;
-        if (!IsAsciiLetterOrDigit(name[0]) || !IsAsciiLetterOrDigit(name[^1])) return false;
-        return name.All(c => IsAsciiLetterOrDigit(c) || c == '-');
+        if (name.Length is 0 or > 253) return false;
+
+        var labels = name.Split('.');
+        if (labels.Length > 8) return false;
+
+        foreach (var label in labels)
+        {
+            if (label.Length is 0 or > 63) return false;
+            if (!IsAsciiLetterOrDigit(label[0]) || !IsAsciiLetterOrDigit(label[^1])) return false;
+            if (!label.All(c => IsAsciiLetterOrDigit(c) || c == '-')) return false;
+        }
+
+        return true;
     }
+
+    /// <summary>
+    /// True when the name is a single label, that is, a name that still needs the domain.
+    /// </summary>
+    public static bool IsShortComputerName(string name)
+        => !name.Contains('.');
 
     /// <summary>
     /// True when the name can be used as a single path segment and handed to another program.

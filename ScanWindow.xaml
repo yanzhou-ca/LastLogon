@@ -68,7 +68,20 @@
                 <TextBlock x:Name="UsernameErrorLabel" Style="{StaticResource ValidationMessage}"
                            Visibility="Collapsed" />
             </StackPanel>
-            <TextBlock x:Name="ComputersLabel" Text="Computer name (short name)" Style="{StaticResource FieldLabel}" />
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock x:Name="ComputersLabel" Text="Computer name (short name)" Style="{StaticResource FieldLabel}" />
+                <ComboBox x:Name="AddressingCombo" Grid.Column="1" Width="185" SelectedIndex="0"
+                          SelectionChanged="AddressingCombo_SelectionChanged"
+                          AutomationProperties.Name="How the computer is addressed"
+                          ToolTip="Domain-qualified completes the name with your domain and cannot be redirected by a name answer on the network. Short name uses the name the way Windows resolves it, which some estates need when the DNS name of a computer differs from its short name.">
+                    <ComboBoxItem Content="Domain-qualified name" />
+                    <ComboBoxItem Content="Short name" />
+                </ComboBox>
+            </Grid>
             <TextBox x:Name="ComputersBox" AcceptsReturn="True" TextWrapping="Wrap" Padding="6,4"
                      MinHeight="30" MaxHeight="110" VerticalScrollBarVisibility="Auto"
                      AutomationProperties.Name="Computer names" TextChanged="ValidationInput_TextChanged"

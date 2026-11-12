@@ -9,17 +9,23 @@ public class InputParserTests
     [InlineData("pc01")]
     [InlineData("PC-01")]
     [InlineData("a")]
-    public void IsValidComputerName_AcceptsShortHostNames(string name)
+    [InlineData("pc01.corp.example")]
+    [InlineData("pc01.corp.example.com")]
+    public void IsValidComputerName_AcceptsHostNames(string name)
         => Assert.True(InputParser.IsValidComputerName(name));
 
     [Theory]
     [InlineData("")]
-    [InlineData("pc01.corp.example")]
     [InlineData(@"\\attacker\share")]
     [InlineData("attacker:445")]
     [InlineData("-pc01")]
     [InlineData("pc01-")]
     [InlineData("pc_01")]
+    [InlineData("pc01.")]
+    [InlineData(".pc01")]
+    [InlineData("pc..01")]
+    [InlineData("pc01..corp")]
+    [InlineData("pc 01")]
     public void IsValidComputerName_RejectsAnythingThatCouldAddressAnotherHost(string name)
         => Assert.False(InputParser.IsValidComputerName(name));
 
@@ -66,6 +72,25 @@ public class ComputerTargetTests
     {
         Assert.Equal("pc01", ComputerTarget.Qualify("pc01", "corp/share"));
         Assert.Equal("pc01", ComputerTarget.Qualify("pc01", ""));
+    }
+
+    [Fact]
+    public void Qualify_LeavesAFullyQualifiedNameAlone()
+        => Assert.Equal("pc01.other.example", ComputerTarget.Qualify("pc01.other.example", "corp.example"));
+
+    [Fact]
+    public void Qualify_UsesTheShortNameWhenTheOperatorAsksForIt()
+    {
+        var previous = ComputerTarget.AddressingMode;
+        try
+        {
+            ComputerTarget.AddressingMode = ComputerTarget.Addressing.ShortName;
+            Assert.Equal("pc01", ComputerTarget.Qualify("pc01", "corp.example"));
+        }
+        finally
+        {
+            ComputerTarget.AddressingMode = previous;
+        }
     }
 
     [Fact]
