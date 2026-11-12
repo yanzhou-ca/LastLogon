@@ -8,6 +8,7 @@ public class FakeFs : IProfileFileSystem
     public Dictionary<string, List<string>> Folders = new(StringComparer.OrdinalIgnoreCase);
     public Dictionary<string, DateTime?> NtUser = new(StringComparer.OrdinalIgnoreCase);
     public Func<string, Exception?>? Fail;
+    public Func<string, string, Exception?>? FailNtUser;
     public TimeSpan Delay = TimeSpan.Zero;
     private int _cur, _peak;
     public int Peak => _peak;
@@ -24,7 +25,12 @@ public class FakeFs : IProfileFileSystem
         }
         finally { Interlocked.Decrement(ref _cur); }
     }
-    public DateTime? GetNtUserDatTime(string c, string u) => NtUser.TryGetValue($"{c}|{u}", out var t) ? t : null;
+    public DateTime? GetNtUserDatTime(string c, string u)
+    {
+        var ex = FailNtUser?.Invoke(c, u);
+        if (ex != null) throw ex;
+        return NtUser.TryGetValue($"{c}|{u}", out var t) ? t : null;
+    }
     public DateTime GetFolderTime(string c, string u) => new(2020, 1, 1);
 }
 
@@ -141,6 +147,22 @@ public class ProfileScannerTests
         Assert.Equal(ScanStatus.Ok, row.Status);
         Assert.Equal("alice", row.Username);
         Assert.Equal(ActivitySource.NtUserDat, row.Source);
+    }
+
+    [Fact]
+    public async Task FindUser_KnownProfileAccessDenied_ReportsTheProfilePath()
+    {
+        var fs = Basic();
+        fs.Fail = _ => new UnauthorizedAccessException("listing is denied");
+        fs.FailNtUser = (_, _) => new UnauthorizedAccessException(
+            @"Access to the path '\\pc1\C$\Users\alice\NTUSER.DAT' is denied.");
+        var list = new List<ProfileResult>();
+        await foreach (var r in new ProfileScanner(fs).FindUserAsync("alice", new[] { "pc1" }, default))
+            list.Add(r);
+
+        var row = Assert.Single(list);
+        Assert.Equal(ScanStatus.AccessDenied, row.Status);
+        Assert.Contains("NTUSER.DAT", row.Message);
     }
 
     [Fact]

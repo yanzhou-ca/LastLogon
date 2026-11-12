@@ -164,13 +164,30 @@ public class ProfileScanner
                 // A known profile folder can be read without listing C:\Users. Some estates
                 // deny the listing but allow reading a known profile, and the by-user lookup
                 // already knows the folder name it is looking for.
-                var direct = TryReadKnownProfile(computer, username);
-                if (direct is not null) return direct;
+                Exception? directError = null;
+                try
+                {
+                    var direct = TryReadKnownProfile(computer, username);
+                    if (direct is not null) return direct;
+                }
+                catch (UnauthorizedAccessException ex)
+                {
+                    // Keep the more specific file error for the case where the listing is
+                    // refused as well; a suffixed folder may still be found by the listing.
+                    directError = ex;
+                }
 
-                var folders = _fs.ListUserFolders(computer);
-                var match = folders.FirstOrDefault(f => f.Equals(username, StringComparison.OrdinalIgnoreCase))
-                    ?? folders.FirstOrDefault(f => f.StartsWith(username + ".", StringComparison.OrdinalIgnoreCase));
-                return match is null ? null : ReadProfile(computer, match);
+                try
+                {
+                    var folders = _fs.ListUserFolders(computer);
+                    var match = folders.FirstOrDefault(f => f.Equals(username, StringComparison.OrdinalIgnoreCase))
+                        ?? folders.FirstOrDefault(f => f.StartsWith(username + ".", StringComparison.OrdinalIgnoreCase));
+                    return match is null ? null : ReadProfile(computer, match);
+                }
+                catch when (directError is not null)
+                {
+                    throw directError;
+                }
             }, ct, task => pending = task);
 
             return result is null
@@ -198,13 +215,9 @@ public class ProfileScanner
         {
             time = _fs.GetNtUserDatTime(computer, username);
         }
-        catch (UnauthorizedAccessException)
-        {
-            // The listing may still be allowed; let it report the real reason if it is not.
-            return null;
-        }
         catch (IOException)
         {
+            // A missing folder is found by the listing, which also knows about domain suffixes.
             return null;
         }
 
