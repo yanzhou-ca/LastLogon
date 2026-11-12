@@ -1,0 +1,263 @@
+<Window x:Class="LastLogon.ScanWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:LastLogon"
+        Title="Last Profile Activity"
+        Width="940" Height="620" MinWidth="900" MinHeight="480"
+        WindowStartupLocation="CenterScreen"
+        FontFamily="Segoe UI" FontSize="13"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True">
+
+    <Window.Resources>
+        <Style TargetType="Button">
+            <Setter Property="Padding" Value="14,6" />
+            <Setter Property="MinWidth" Value="80" />
+        </Style>
+        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
+            <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
+            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}" />
+            <Setter Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
+            <Setter Property="Padding" Value="18,6" />
+            <Setter Property="MinWidth" Value="88" />
+            <Setter Property="FontWeight" Value="SemiBold" />
+        </Style>
+        <Style x:Key="Caption" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#666" />
+            <Setter Property="FontSize" Value="12" />
+        </Style>
+        <Style x:Key="FieldLabel" TargetType="TextBlock">
+            <Setter Property="FontWeight" Value="SemiBold" />
+            <Setter Property="Margin" Value="0,0,0,4" />
+        </Style>
+        <Style x:Key="ValidationMessage" TargetType="TextBlock">
+            <Setter Property="Foreground" Value="#A4262C" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="TextWrapping" Value="Wrap" />
+        </Style>
+        <local:LocalTimeTextConverter x:Key="LocalTimeTextConverter" />
+    </Window.Resources>
+
+    <Grid Margin="24,16,24,16">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,16">
+            <TextBlock Text="Lookup" Style="{StaticResource FieldLabel}" />
+            <StackPanel Orientation="Horizontal">
+                <RadioButton x:Name="ByComputerRadio" Content="By computer: who used this PC"
+                             IsChecked="True" Margin="0,0,24,0" Checked="Mode_Changed" />
+                <RadioButton x:Name="ByUserRadio" Content="By user: which PCs did this user use"
+                             Margin="0,0,24,0" Checked="Mode_Changed" />
+                <RadioButton x:Name="LogonHistoryRadio" Content="Logon history"
+                             Checked="Mode_Changed" />
+            </StackPanel>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Margin="0,0,0,16">
+            <StackPanel x:Name="UsernamePanel" Visibility="Collapsed" Margin="0,0,0,8">
+                <TextBlock Text="Username (jdoe, CORP\jdoe or jdoe@corp.local)" Style="{StaticResource FieldLabel}" />
+                <TextBox x:Name="UsernameBox" Padding="6,4" AutomationProperties.Name="Username"
+                         TextChanged="ValidationInput_TextChanged" />
+                <TextBlock x:Name="UsernameErrorLabel" Style="{StaticResource ValidationMessage}"
+                           Visibility="Collapsed" />
+            </StackPanel>
+            <TextBlock x:Name="ComputersLabel" Text="Computer name (short name)" Style="{StaticResource FieldLabel}" />
+            <TextBox x:Name="ComputersBox" AcceptsReturn="True" TextWrapping="Wrap" Padding="6,4"
+                     MinHeight="30" MaxHeight="110" VerticalScrollBarVisibility="Auto"
+                     AutomationProperties.Name="Computer names" TextChanged="ValidationInput_TextChanged" />
+            <TextBlock x:Name="ComputersErrorLabel" Style="{StaticResource ValidationMessage}"
+                       Visibility="Collapsed" />
+            <StackPanel x:Name="ListButtons" Orientation="Horizontal" Visibility="Collapsed" Margin="0,8,0,0">
+                <Button Content="Import .txt…" Click="Import_Click" Margin="0,0,8,0" />
+                <Button Content="From AD…" Click="FromAd_Click" />
+            </StackPanel>
+            <StackPanel x:Name="HistoryPanel" Visibility="Collapsed" Margin="0,10,0,0">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="170" />
+                        <ColumnDefinition Width="170" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <StackPanel Margin="0,0,12,0">
+                        <TextBlock Text="From (local time)" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="HistoryStartBox" Padding="6,4"
+                                 TextChanged="ValidationInput_TextChanged"
+                                 AutomationProperties.Name="History start local date and time" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="1" Margin="0,0,12,0">
+                        <TextBlock Text="To (local time)" Style="{StaticResource FieldLabel}" />
+                        <TextBox x:Name="HistoryEndBox" Padding="6,4"
+                                 TextChanged="ValidationInput_TextChanged"
+                                 AutomationProperties.Name="History end local date and time" />
+                    </StackPanel>
+                    <StackPanel Grid.Column="2" Margin="0,0,12,0">
+                        <TextBlock Text="Account" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="AccountFilterCombo" SelectedIndex="0"
+                                  SelectionChanged="HistoryFilter_Changed"
+                                  AutomationProperties.Name="Account filter">
+                            <ComboBoxItem Content="All accounts" />
+                            <ComboBoxItem Content="Local accounts" />
+                            <ComboBoxItem Content="Domain accounts" />
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Grid.Column="3">
+                        <TextBlock Text="Logon type" Style="{StaticResource FieldLabel}" />
+                        <ComboBox x:Name="TypeFilterCombo" SelectedIndex="0"
+                                  SelectionChanged="HistoryFilter_Changed"
+                                  AutomationProperties.Name="Logon type filter">
+                            <ComboBoxItem Content="All types" />
+                            <ComboBoxItem Content="Interactive" />
+                            <ComboBoxItem Content="Network" />
+                            <ComboBoxItem Content="Service" />
+                            <ComboBoxItem Content="Other" />
+                        </ComboBox>
+                    </StackPanel>
+                </Grid>
+                <TextBlock x:Name="HistoryTimeErrorLabel" Style="{StaticResource ValidationMessage}"
+                           Visibility="Collapsed" />
+                <TextBlock Text="Security-log results depend on permissions, audit policy, and retention. Missing events do not prove there was no logon."
+                           Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
+            </StackPanel>
+        </StackPanel>
+
+        <Grid Grid.Row="2" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="Auto" />
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
+                <Button x:Name="ScanButton" Content="Scan" IsDefault="True" Click="Scan_Click"
+                        Margin="0,0,8,0" Style="{StaticResource PrimaryButton}" />
+                <Button x:Name="CancelButton" Content="Cancel" IsEnabled="False" Click="Cancel_Click" />
+                <ProgressBar x:Name="Progress" IsIndeterminate="True" Width="80" Height="4"
+                             Margin="12,0,0,0" VerticalAlignment="Center" Visibility="Collapsed" />
+            </StackPanel>
+
+            <StackPanel x:Name="StaleSettingsPanel" Grid.Column="1" Margin="24,0,0,0">
+                <TextBlock Text="Stale after (days)" Style="{StaticResource FieldLabel}" />
+                <TextBox x:Name="StaleBox" Text="90" Width="80" Padding="6,4"
+                         HorizontalAlignment="Left" TextChanged="StaleBox_TextChanged"
+                         AutomationProperties.Name="Stale after days" />
+            </StackPanel>
+
+            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Bottom">
+                <Button Content="Copy" Click="Copy_Click" Margin="0,0,8,0"
+                        ToolTip="Copy selected rows (or all)" />
+                <Button Content="Export CSV" Click="Export_Click" Margin="0,0,8,0"
+                        ToolTip="Export results to CSV" />
+                <Button x:Name="OpenFolderButton" Content="Open folder" IsEnabled="False"
+                        Click="OpenFolder_Click" ToolTip="Open selected profile folder" />
+            </StackPanel>
+        </Grid>
+
+        <Grid x:Name="ResultsHost" Grid.Row="3">
+            <ListView x:Name="ResultsList" SelectionMode="Extended" SelectionChanged="ResultsList_SelectionChanged"
+                      AutomationProperties.Name="Profile scan results"
+                      BorderBrush="#DDD" BorderThickness="1">
+                <ListView.ItemContainerStyle>
+                    <Style TargetType="ListViewItem">
+                        <EventSetter Event="Loaded" Handler="Item_Loaded" />
+                        <Setter Property="Padding" Value="4,3" />
+                    </Style>
+                </ListView.ItemContainerStyle>
+                <ListView.View>
+                    <GridView>
+                        <GridViewColumn Header="Computer" Width="132" DisplayMemberBinding="{Binding Computer}" />
+                        <GridViewColumn Header="Username" Width="132" DisplayMemberBinding="{Binding Username}" />
+                        <GridViewColumn Header="Last profile activity" Width="145" DisplayMemberBinding="{Binding LastActivityText}" />
+                        <GridViewColumn Header="Days ago" Width="72" DisplayMemberBinding="{Binding DaysAgoText}" />
+                        <GridViewColumn Header="Source" Width="80" DisplayMemberBinding="{Binding SourceText}" />
+                        <GridViewColumn Header="Status" Width="250">
+                            <GridViewColumn.CellTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding StatusText}" TextTrimming="CharacterEllipsis"
+                                               ToolTip="{Binding StatusText}" />
+                                </DataTemplate>
+                            </GridViewColumn.CellTemplate>
+                        </GridViewColumn>
+                    </GridView>
+                </ListView.View>
+            </ListView>
+            <Border x:Name="EmptyResultsPanel" BorderBrush="#DDD" BorderThickness="1"
+                    Background="#FAFAFA" IsHitTestVisible="False">
+                <TextBlock x:Name="EmptyResultsLabel" Text="Run a scan to see profile activity."
+                           Foreground="#666" TextAlignment="Center" TextWrapping="Wrap"
+                           HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
+            </Border>
+        </Grid>
+
+        <Grid x:Name="HistoryResultsHost" Grid.Row="3" Visibility="Collapsed">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="3*" MinHeight="180" />
+                <RowDefinition Height="2*" MinHeight="130" />
+            </Grid.RowDefinitions>
+            <Grid Grid.Row="0">
+                <DataGrid x:Name="HistoryEventsGrid" AutoGenerateColumns="False" IsReadOnly="True"
+                          SelectionMode="Extended" SelectionUnit="FullRow"
+                          ItemsSource="{Binding FilteredEvents}"
+                          SelectedItem="{Binding SelectedEvent, Mode=TwoWay}"
+                          AutomationProperties.Name="Logon history events"
+                          CanUserSortColumns="True" HeadersVisibility="Column"
+                          BorderBrush="#DDD" BorderThickness="1">
+                    <DataGrid.Columns>
+                        <DataGridTextColumn Header="Computer" Width="105" Binding="{Binding Computer}" />
+                        <DataGridTextColumn Header="Time (local)" Width="145"
+                                            Binding="{Binding TimeUtc, Converter={StaticResource LocalTimeTextConverter}}" />
+                        <DataGridTextColumn Header="Event ID" Width="75" Binding="{Binding EventId}" />
+                        <DataGridTextColumn Header="Event" Width="175" Binding="{Binding EventName}" />
+                        <DataGridTextColumn Header="Account" Width="130" Binding="{Binding AccountName}" />
+                        <DataGridTextColumn Header="Domain" Width="130" Binding="{Binding AccountDomain}" />
+                        <DataGridTextColumn Header="Logon type" Width="130" Binding="{Binding LogonTypeName}" />
+                        <DataGridTextColumn Header="Source address" Width="125" Binding="{Binding SourceAddress}" />
+                    </DataGrid.Columns>
+                </DataGrid>
+                <Border x:Name="HistoryEmptyPanel" BorderBrush="#DDD" BorderThickness="1"
+                        Background="#FAFAFA" IsHitTestVisible="False">
+                    <TextBlock x:Name="HistoryEmptyLabel" Text="Run a history scan to see Security-log events."
+                               Foreground="#666" TextAlignment="Center" TextWrapping="Wrap"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
+                </Border>
+            </Grid>
+            <Grid Grid.Row="1" Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="*" />
+                </Grid.ColumnDefinitions>
+                <GroupBox Header="Selected event details" Margin="0,0,8,0">
+                    <ListView ItemsSource="{Binding SelectedDetails}" BorderThickness="0">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Field" Width="125" DisplayMemberBinding="{Binding Key}" />
+                                <GridViewColumn Header="Value" Width="350" DisplayMemberBinding="{Binding Value}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </GroupBox>
+                <GroupBox Grid.Column="1" Header="Computer status">
+                    <ListView ItemsSource="{Binding ComputerStatuses}" BorderThickness="0">
+                        <ListView.View>
+                            <GridView>
+                                <GridViewColumn Header="Computer" Width="80" DisplayMemberBinding="{Binding Computer}" />
+                                <GridViewColumn Header="Status" Width="75" DisplayMemberBinding="{Binding Status}" />
+                                <GridViewColumn Header="Message" Width="125" DisplayMemberBinding="{Binding Message}" />
+                            </GridView>
+                        </ListView.View>
+                    </ListView>
+                </GroupBox>
+            </Grid>
+        </Grid>
+
+        <TextBlock x:Name="StatusLabel" Grid.Row="4" Margin="0,12,0,0" Style="{StaticResource Caption}" />
+    </Grid>
+</Window>

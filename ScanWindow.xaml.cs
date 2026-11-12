@@ -1,0 +1,378 @@
+using System;
+using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
+using System.Linq;
+using System.Globalization;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Data;
+using System.Windows.Input;
+using System.Windows.Media;
+using LastLogon.Core;
+using Microsoft.Win32;
+
+namespace LastLogon;
+
+public partial class ScanWindow : Window
+{
+    private readonly MainViewModel _vm;
+    private readonly LogonHistoryViewModel _historyVm;
+    private bool _hasCompletedScan;
+    private const string LocalDateTimeFormat = "yyyy-MM-dd HH:mm";
+
+    public ScanWindow()
+    {
+        Action<Action> dispatch = action =>
+        {
+            if (Dispatcher.CheckAccess()) action();
+            else Dispatcher.BeginInvoke(action);
+        };
+
+        _vm = new MainViewModel(
+            new ProfileScanner(new SmbProfileFileSystem()),
+            dispatch);
+        _historyVm = new LogonHistoryViewModel(
+            new LogonEventScanner(new WindowsLogonEventSource()),
+            dispatch);
+
+        InitializeComponent();
+
+        HistoryResultsHost.DataContext = _historyVm;
+        HistoryStartBox.Text = _historyVm.StartLocal.ToString(LocalDateTimeFormat, CultureInfo.InvariantCulture);
+        HistoryEndBox.Text = _historyVm.EndLocal.ToString(LocalDateTimeFormat, CultureInfo.InvariantCulture);
+        ResultsList.ItemsSource = _vm.Results;
+        StatusLabel.Text = _vm.StatusText;
+        _vm.Results.CollectionChanged += (_, _) => UpdateEmptyResultsState();
+        UpdateEmptyResultsState();
+        UpdateOpenFolderButton();
+        Mode_Changed(this, new RoutedEventArgs());
+
+        _vm.PropertyChanged += (_, e) =>
+        {
+            switch (e.PropertyName)
+            {
+                case nameof(MainViewModel.IsScanning):
+                    UpdateScanControls();
+                    UpdateEmptyResultsState();
+                    break;
+                case nameof(MainViewModel.StatusText):
+                    if (LogonHistoryRadio.IsChecked != true)
+                    {
+                        StatusLabel.Text = _vm.StatusText;
+                        _hasCompletedScan = _vm.StatusText.StartsWith("Done.", StringComparison.Ordinal)
+                            || _vm.StatusText.StartsWith("Cancelled.", StringComparison.Ordinal);
+                        UpdateEmptyResultsState();
+                    }
+                    break;
+                case nameof(MainViewModel.ComputersText):
+                    if (ComputersBox.Text != _vm.ComputersText) ComputersBox.Text = _vm.ComputersText;
+                    break;
+            }
+        };
+
+        _historyVm.PropertyChanged += (_, e) =>
+        {
+            switch (e.PropertyName)
+            {
+                case nameof(LogonHistoryViewModel.IsScanning):
+                    UpdateScanControls();
+                    UpdateHistoryEmptyState();
+                    break;
+                case nameof(LogonHistoryViewModel.StatusText):
+                    if (LogonHistoryRadio.IsChecked == true) StatusLabel.Text = _historyVm.StatusText;
+                    UpdateHistoryEmptyState();
+                    break;
+                case nameof(LogonHistoryViewModel.FilteredEvents):
+                    UpdateHistoryEmptyState();
+                    break;
+            }
+        };
+    }
+
+    private void Mode_Changed(object sender, RoutedEventArgs e)
+    {
+        if (HistoryPanel is null || ListButtons is null || UsernamePanel is null) return;
+
+        var history = LogonHistoryRadio.IsChecked == true;
+        var byUser = !history && ByUserRadio.IsChecked == true;
+        if (!history) _vm.Mode = byUser ? LookupMode.ByUser : LookupMode.ByComputer;
+        Title = history ? "Logon History" : "Last Profile Activity";
+
+        ResultsHost.Visibility = history ? Visibility.Collapsed : Visibility.Visible;
+        HistoryResultsHost.Visibility = history ? Visibility.Visible : Visibility.Collapsed;
+        HistoryPanel.Visibility = history ? Visibility.Visible : Visibility.Collapsed;
+        UsernamePanel.Visibility = ListButtons.Visibility = byUser ? Visibility.Visible : Visibility.Collapsed;
+        StaleSettingsPanel.Visibility = history ? Visibility.Collapsed : Visibility.Visible;
+        OpenFolderButton.Visibility = history ? Visibility.Collapsed : Visibility.Visible;
+        ComputersLabel.Text = history || byUser
+            ? "Computers (short names, one per line, comma or space separated)"
+            : "Computer name (short name)";
+        if (UsernameErrorLabel is not null) UsernameErrorLabel.Visibility = Visibility.Collapsed;
+        if (ComputersErrorLabel is not null) ComputersErrorLabel.Visibility = Visibility.Collapsed;
+        if (history)
+        {
+            ApplyHistoryFilters();
+            StatusLabel.Text = _historyVm.StatusText;
+            UpdateHistoryEmptyState();
+        }
+        else
+        {
+            StatusLabel.Text = _vm.StatusText;
+            UpdateEmptyResultsState();
+        }
+
+        UpdateScanControls();
+    }
+
+    private async void Scan_Click(object sender, RoutedEventArgs e)
+    {
+        if (LogonHistoryRadio.IsChecked == true)
+        {
+            _historyVm.ComputersText = ComputersBox.Text;
+            if (!TryParseLocalDateTime(HistoryStartBox.Text, out var startLocal)
+                || !TryParseLocalDateTime(HistoryEndBox.Text, out var endLocal))
+            {
+                HistoryTimeErrorLabel.Text = $"Enter local times as {LocalDateTimeFormat}.";
+                HistoryTimeErrorLabel.Visibility = Visibility.Visible;
+                StatusLabel.Text = HistoryTimeErrorLabel.Text;
+                return;
+            }
+
+            HistoryTimeErrorLabel.Visibility = Visibility.Collapsed;
+            _historyVm.StartLocal = startLocal;
+            _historyVm.EndLocal = endLocal;
+            ApplyHistoryFilters();
+            await _historyVm.ScanAsync();
+            StatusLabel.Text = _historyVm.StatusText;
+            UpdateHistoryEmptyState();
+            return;
+        }
+
+        _vm.ComputersText = ComputersBox.Text;
+        _vm.Username = UsernameBox.Text;
+        await _vm.ScanAsync();
+        StatusLabel.Text = _vm.StatusText;
+        UpdateValidationFeedback();
+        UpdateEmptyResultsState();
+    }
+
+    private void HistoryFilter_Changed(object sender, SelectionChangedEventArgs e)
+        => ApplyHistoryFilters();
+
+    private void ApplyHistoryFilters()
+    {
+        if (AccountFilterCombo is null || TypeFilterCombo is null) return;
+        if (AccountFilterCombo.SelectedIndex is >= 0 and <= 2)
+            _historyVm.AccountFilter = (LogonAccountFilter)AccountFilterCombo.SelectedIndex;
+        if (TypeFilterCombo.SelectedIndex is >= 0 and <= 4)
+            _historyVm.TypeFilter = (LogonTypeFilter)TypeFilterCombo.SelectedIndex;
+    }
+
+    private void ValidationInput_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (sender == ComputersBox) ComputersErrorLabel.Visibility = Visibility.Collapsed;
+        if (sender == UsernameBox) UsernameErrorLabel.Visibility = Visibility.Collapsed;
+        if (sender == HistoryStartBox || sender == HistoryEndBox)
+            HistoryTimeErrorLabel.Visibility = Visibility.Collapsed;
+        if (_vm.StatusText.StartsWith("Computer name: ", StringComparison.Ordinal)
+            || _vm.StatusText.StartsWith("Username: ", StringComparison.Ordinal))
+            StatusLabel.Text = "Ready";
+    }
+
+    private void UpdateValidationFeedback()
+    {
+        UsernameErrorLabel.Visibility = ComputersErrorLabel.Visibility = Visibility.Collapsed;
+
+        const string computerPrefix = "Computer name: ";
+        const string usernamePrefix = "Username: ";
+        if (_vm.StatusText.StartsWith(computerPrefix, StringComparison.Ordinal))
+        {
+            ComputersErrorLabel.Text = _vm.StatusText[computerPrefix.Length..];
+            ComputersErrorLabel.Visibility = Visibility.Visible;
+            ComputersBox.Focus();
+            Keyboard.Focus(ComputersBox);
+        }
+        else if (_vm.StatusText.StartsWith(usernamePrefix, StringComparison.Ordinal))
+        {
+            UsernameErrorLabel.Text = _vm.StatusText[usernamePrefix.Length..];
+            UsernameErrorLabel.Visibility = Visibility.Visible;
+            UsernameBox.Focus();
+            Keyboard.Focus(UsernameBox);
+        }
+    }
+
+    private void UpdateEmptyResultsState()
+    {
+        if (ResultsList is null || EmptyResultsPanel is null) return;
+        EmptyResultsPanel.Visibility = _vm.Results.Count == 0 && !_vm.IsScanning
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+        EmptyResultsLabel.Text = _vm.StatusText.StartsWith("Cancelled.", StringComparison.Ordinal)
+            ? "Scan cancelled before any results were found."
+            : _hasCompletedScan
+                ? "No profiles found for this scan."
+                : "Run a scan to see profile activity.";
+    }
+
+    private void UpdateHistoryEmptyState()
+    {
+        if (HistoryEmptyPanel is null || _historyVm is null) return;
+        var noVisibleEvents = _historyVm.FilteredEvents.Count == 0;
+        HistoryEmptyPanel.Visibility = noVisibleEvents ? Visibility.Visible : Visibility.Collapsed;
+        HistoryEmptyLabel.Text = _historyVm.IsScanning
+            ? "Querying Security logs…"
+            : _historyVm.Events.Count > 0
+                ? "No events match the current filters."
+                : _historyVm.ComputerStatuses.Count > 0
+                    && _historyVm.ComputerStatuses.All(item => item.Status == LogonQueryStatus.Success)
+                        ? "No logon events were found in this time range."
+                        : _historyVm.ComputerStatuses.Count > 0
+                            ? "No events returned. Review the computer status below."
+                            : "Run a history scan to see Security-log events.";
+    }
+
+    private void UpdateScanControls()
+    {
+        if (ScanButton is null || CancelButton is null || Progress is null) return;
+        var isScanning = _vm.IsScanning || _historyVm.IsScanning;
+        ScanButton.IsEnabled = !isScanning;
+        CancelButton.IsEnabled = isScanning;
+        Progress.Visibility = isScanning ? Visibility.Visible : Visibility.Collapsed;
+        ByComputerRadio.IsEnabled = ByUserRadio.IsEnabled = LogonHistoryRadio.IsEnabled = !isScanning;
+    }
+
+    private void ResultsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+        => UpdateOpenFolderButton();
+
+    private void UpdateOpenFolderButton()
+        => OpenFolderButton.IsEnabled = ResultsList.SelectedItem is ProfileResult r
+            && !string.IsNullOrEmpty(r.Username);
+
+    private void Cancel_Click(object sender, RoutedEventArgs e)
+    {
+        if (LogonHistoryRadio.IsChecked == true) _historyVm.Cancel();
+        else _vm.Cancel();
+    }
+
+    private void StaleBox_TextChanged(object sender, TextChangedEventArgs e)
+    {
+        if (_vm is null || !int.TryParse(StaleBox.Text, out var days) || days < 1) return;
+        _vm.StaleDays = days;
+        foreach (var item in _vm.Results)
+        {
+            if (ResultsList.ItemContainerGenerator.ContainerFromItem(item) is ListViewItem c) Highlight(c, item);
+        }
+    }
+
+    private void Item_Loaded(object sender, RoutedEventArgs e)
+    {
+        if (sender is ListViewItem c && c.DataContext is ProfileResult r) Highlight(c, r);
+    }
+
+    private void Highlight(ListViewItem container, ProfileResult r)
+    {
+        container.Background = _vm.IsStale(r)
+            ? new SolidColorBrush(Color.FromArgb(60, 255, 160, 0))
+            : Brushes.Transparent;
+    }
+
+    private List<ProfileResult> SelectedOrAll()
+    {
+        var sel = ResultsList.SelectedItems.OfType<ProfileResult>().ToList();
+        return sel.Count > 0 ? sel : _vm.Results.ToList();
+    }
+
+    private void Copy_Click(object sender, RoutedEventArgs e)
+    {
+        if (LogonHistoryRadio.IsChecked == true)
+        {
+            var selectedEvents = HistoryEventsGrid.SelectedItems.OfType<LogonEventRecord>().ToList();
+            var rows = selectedEvents.Count > 0 ? selectedEvents : _historyVm.FilteredEvents;
+            var eventText = ResultExporter.ToLogonEventTabSeparated(rows);
+            if (eventText.Length > 0) Clipboard.SetText(eventText);
+            return;
+        }
+
+        var text = ResultExporter.ToTabSeparated(SelectedOrAll());
+        if (text.Length > 0) Clipboard.SetText(text);
+    }
+
+    private void Export_Click(object sender, RoutedEventArgs e)
+    {
+        if (LogonHistoryRadio.IsChecked == true)
+        {
+            var historyDialog = new SaveFileDialog
+            {
+                FileName = "LogonHistory",
+                DefaultExt = ".csv",
+                Filter = "CSV (*.csv)|*.csv"
+            };
+            if (historyDialog.ShowDialog(this) != true) return;
+            File.WriteAllText(
+                historyDialog.FileName,
+                ResultExporter.ToLogonEventCsv(_historyVm.FilteredEvents),
+                new System.Text.UTF8Encoding(true));
+            return;
+        }
+
+        var dlg = new SaveFileDialog { FileName = "LastProfileActivity", DefaultExt = ".csv", Filter = "CSV (*.csv)|*.csv" };
+        if (dlg.ShowDialog(this) != true) return;
+        File.WriteAllText(dlg.FileName, ResultExporter.ToCsv(_vm.Results), new System.Text.UTF8Encoding(true));
+    }
+
+    private void Import_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new OpenFileDialog { Filter = "Text or CSV (*.txt;*.csv)|*.txt;*.csv|All files|*.*" };
+        if (dlg.ShowDialog(this) != true) return;
+        ComputersBox.Text = File.ReadAllText(dlg.FileName);
+    }
+
+    private async void FromAd_Click(object sender, RoutedEventArgs e)
+    {
+        var dlg = new AdDialog { Owner = this };
+        if (dlg.ShowDialog() != true) return;
+        await _vm.LoadFromAdAsync(dlg.Prefix, dlg.Ou);
+    }
+
+    private void OpenFolder_Click(object sender, RoutedEventArgs e)
+    {
+        if (ResultsList.SelectedItem is not ProfileResult r || string.IsNullOrEmpty(r.Username)) return;
+        Process.Start(new ProcessStartInfo("explorer.exe", $"\"\\\\{r.Computer}\\C$\\Users\\{r.Username}\"") { UseShellExecute = true });
+    }
+
+    private static bool TryParseLocalDateTime(string text, out DateTimeOffset value)
+    {
+        if (!DateTime.TryParseExact(
+                text,
+                LocalDateTimeFormat,
+                CultureInfo.InvariantCulture,
+                DateTimeStyles.None,
+                out var localDateTime))
+        {
+            value = default;
+            return false;
+        }
+
+        localDateTime = DateTime.SpecifyKind(localDateTime, DateTimeKind.Unspecified);
+        if (TimeZoneInfo.Local.IsInvalidTime(localDateTime))
+        {
+            value = default;
+            return false;
+        }
+
+        value = new DateTimeOffset(localDateTime, TimeZoneInfo.Local.GetUtcOffset(localDateTime));
+        return true;
+    }
+}
+
+public sealed class LocalTimeTextConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is DateTimeOffset time
+            ? time.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss", CultureInfo.InvariantCulture)
+            : "";
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => Binding.DoNothing;
+}

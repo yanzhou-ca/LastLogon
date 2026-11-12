@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "LastLogon (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "LastLogon (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
