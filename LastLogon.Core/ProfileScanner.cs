@@ -22,7 +22,28 @@ public class ProfileScanner
     }
 
     public async Task<IReadOnlyList<ProfileResult>> ScanComputerAsync(string computer, CancellationToken ct)
+        => (await ScanComputerWithOutcomeAsync(computer, ct)).Results;
+
+    public IAsyncEnumerable<ProfileResult> ScanComputersAsync(
+        IEnumerable<string> computers, CancellationToken ct)
+        => ScanOnComputersAsync<ProfileResult>(computers, ScanComputerWithOutcomeAsync, ct);
+
+    public IAsyncEnumerable<ProfileResult> FindUserAsync(
+        string username, IEnumerable<string> computers, CancellationToken ct)
+        => ScanOnComputersAsync<ProfileResult>(computers, (computer, token) => CheckUserAsync(computer, username, token), ct);
+
+    /// <summary>
+    /// The outcome of scanning one computer, together with any work that is still running in the
+    /// background because the remote call could not be interrupted.
+    /// </summary>
+    private sealed record ScanOutcome<T>(IReadOnlyList<T> Results, Task? PendingWork)
     {
+        public static ScanOutcome<T> Empty { get; } = new(Array.Empty<T>(), null);
+    }
+
+    private async Task<ScanOutcome<ProfileResult>> ScanComputerWithOutcomeAsync(string computer, CancellationToken ct)
+    {
+        Task? pending = null;
         try
         {
             var results = await RunWithTimeout(() =>
@@ -34,8 +55,23 @@ public class ProfileScanner
                     list.Add(ReadProfile(computer, folder));
                 }
                 return list;
-            }, ct);
-            return results.OrderByDescending(r => r.LastActivity ?? DateTime.MinValue).ToList();
+            }, ct, task => pending = task);
+
+            if (results.Count == 0)
+            {
+                // A reachable computer without user profiles still gets a row, so that it is not
+                // mistaken for a computer that was never scanned.
+                return new ScanOutcome<ProfileResult>(
+                    new[]
+                    {
+                        new ProfileResult(computer, "", null, null, ScanStatus.NoProfile, "No user profiles found.")
+                    },
+                    null);
+            }
+
+            return new ScanOutcome<ProfileResult>(
+                results.OrderByDescending(r => r.LastActivity ?? DateTime.MinValue).ToList(),
+                null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -43,25 +79,13 @@ public class ProfileScanner
         }
         catch (Exception ex)
         {
-            return new[] { Failure(computer, "", ex) };
+            return new ScanOutcome<ProfileResult>(new[] { Failure(computer, "", ex) }, pending);
         }
     }
 
-    public IAsyncEnumerable<ProfileResult> ScanComputersAsync(
-        IEnumerable<string> computers, CancellationToken ct)
-        => ScanOnComputersAsync<ProfileResult>(computers, ScanComputerAsync, ct);
-
-    public IAsyncEnumerable<ProfileResult> FindUserAsync(
-        string username, IEnumerable<string> computers, CancellationToken ct)
-        => ScanOnComputersAsync<ProfileResult>(computers, async (computer, token) =>
-        {
-            var result = await CheckUserAsync(computer, username, token);
-            return result is null ? Array.Empty<ProfileResult>() : new[] { result };
-        }, ct);
-
     private async IAsyncEnumerable<T> ScanOnComputersAsync<T>(
         IEnumerable<string> computers,
-        Func<string, CancellationToken, Task<IReadOnlyList<T>>> scanComputer,
+        Func<string, CancellationToken, Task<ScanOutcome<T>>> scanComputer,
         [EnumeratorCancellation] CancellationToken ct)
     {
         var channel = Channel.CreateUnbounded<T>();
@@ -74,14 +98,29 @@ public class ProfileScanner
                 await gate.WaitAsync(ct);
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { return; }
+
+            var releaseGate = true;
             try
             {
-                var results = await scanComputer(computer, ct);
-                foreach (var result in results)
+                var outcome = await scanComputer(computer, ct);
+                foreach (var result in outcome.Results)
                     await channel.Writer.WriteAsync(result, CancellationToken.None);
+
+                if (outcome.PendingWork is not null)
+                {
+                    // The remote call timed out but cannot be interrupted and is still holding
+                    // an SMB connection open. The slot stays taken until it ends so that the
+                    // number of live connections stays bounded.
+                    releaseGate = false;
+                    _ = outcome.PendingWork.ContinueWith(
+                        _ => ReleaseGate(gate),
+                        CancellationToken.None,
+                        TaskContinuationOptions.ExecuteSynchronously,
+                        TaskScheduler.Default);
+                }
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
-            finally { gate.Release(); }
+            finally { if (releaseGate) gate.Release(); }
         }).ToList();
 
         var producersTask = Task.WhenAll(producers);
@@ -103,20 +142,40 @@ public class ProfileScanner
         }
     }
 
-    private async Task<ProfileResult?> CheckUserAsync(string computer, string username, CancellationToken ct)
+    private static void ReleaseGate(SemaphoreSlim gate)
     {
         try
         {
-            return await RunWithTimeout(() =>
+            gate.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The scan finished while the abandoned call was still running.
+        }
+    }
+
+    private async Task<ScanOutcome<ProfileResult>> CheckUserAsync(string computer, string username, CancellationToken ct)
+    {
+        Task? pending = null;
+        try
+        {
+            var result = await RunWithTimeout(() =>
             {
                 var folders = _fs.ListUserFolders(computer);
                 var match = folders.FirstOrDefault(f => f.Equals(username, StringComparison.OrdinalIgnoreCase))
                     ?? folders.FirstOrDefault(f => f.StartsWith(username + ".", StringComparison.OrdinalIgnoreCase));
                 return match is null ? null : ReadProfile(computer, match);
-            }, ct);
+            }, ct, task => pending = task);
+
+            return result is null
+                ? ScanOutcome<ProfileResult>.Empty
+                : new ScanOutcome<ProfileResult>(new[] { result }, null);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception ex) { return Failure(computer, username, ex); }
+        catch (Exception ex)
+        {
+            return new ScanOutcome<ProfileResult>(new[] { Failure(computer, username, ex) }, pending);
+        }
     }
 
     private ProfileResult ReadProfile(string computer, string folder)
@@ -127,21 +186,29 @@ public class ProfileScanner
             : new ProfileResult(computer, folder, _fs.GetFolderTime(computer, folder), ActivitySource.Folder, ScanStatus.Ok, "NTUSER.DAT not found; using folder time");
     }
 
-    private async Task<T> RunWithTimeout<T>(Func<T> work, CancellationToken ct)
+    private async Task<T> RunWithTimeout<T>(Func<T> work, CancellationToken ct, Action<Task>? onTimeout = null)
     {
         var task = Task.Run(work, CancellationToken.None);
         var delay = Task.Delay(_timeout, ct);
         var done = await Task.WhenAny(task, delay);
         if (done == task) return await task;
         ct.ThrowIfCancellationRequested();
-        _ = task.ContinueWith(t => _ = t.Exception, TaskContinuationOptions.OnlyOnFaulted);
+
+        // The remote call cannot be interrupted, so it keeps running in the background. It is
+        // handed to the caller so that the concurrency slot is not released while the call is
+        // still holding a connection open.
+        onTimeout?.Invoke(task);
+        _ = task.ContinueWith(
+            t => { _ = t.Exception; },
+            TaskContinuationOptions.OnlyOnFaulted | TaskContinuationOptions.ExecuteSynchronously);
         throw new TimeoutException("Timed out");
     }
 
     private static ProfileResult Failure(string computer, string user, Exception ex) => ex switch
     {
         UnauthorizedAccessException => new(computer, user, null, null, ScanStatus.AccessDenied, "Access denied"),
-        TimeoutException or DirectoryNotFoundException => new(computer, user, null, null, ScanStatus.Offline, "Offline or C$ unreachable"),
+        TimeoutException => new(computer, user, null, null, ScanStatus.TimedOut, "Timed out"),
+        DirectoryNotFoundException => new(computer, user, null, null, ScanStatus.Offline, "Offline or C$ unreachable"),
         IOException => new(computer, user, null, null, ScanStatus.Offline, ex.Message),
         _ => new(computer, user, null, null, ScanStatus.Error, ex.Message),
     };

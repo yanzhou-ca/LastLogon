@@ -195,6 +195,96 @@ public class LogonHistoryViewModelTests
             viewModel.SelectedDetails);
     }
 
+    [Fact]
+    public async Task ScanAsync_RejectsATimeRangeThatIsTooLong()
+    {
+        var scanner = new FakeScanner((_, _, _, _) => Updates());
+        var viewModel = new LogonHistoryViewModel(scanner)
+        {
+            ComputersText = "pc01",
+            StartLocal = new DateTimeOffset(2024, 1, 1, 0, 0, 0, TimeSpan.Zero),
+            EndLocal = new DateTimeOffset(2025, 3, 5, 0, 0, 0, TimeSpan.Zero)
+        };
+
+        await viewModel.ScanAsync();
+
+        Assert.Equal(0, scanner.CallCount);
+        Assert.Contains("must not exceed", viewModel.StatusText);
+    }
+
+    [Fact]
+    public async Task ScanAsync_KeepsTheEventLimitAndReportsThatResultsAreIncomplete()
+    {
+        var events = Enumerable.Range(0, 50)
+            .Select(index => Record(
+                "pc01",
+                "user" + index,
+                "CORP",
+                2,
+                new DateTimeOffset(2025, 3, 4, 5, 0, 0, TimeSpan.Zero).AddMinutes(index)))
+            .ToArray();
+        var scanner = new FakeScanner((_, _, _, _) => Updates(
+            events.Select(item => (LogonScanUpdate)new LogonEventFound(item)).ToArray()));
+        var viewModel = new LogonHistoryViewModel(scanner, maxEvents: 10) { ComputersText = "pc01" };
+
+        await viewModel.ScanAsync();
+
+        Assert.Equal(10, viewModel.Events.Count);
+        Assert.True(viewModel.IsTruncated);
+        Assert.Contains("incomplete", viewModel.StatusText);
+        Assert.Contains("event limit", viewModel.StatusText);
+    }
+
+    [Fact]
+    public async Task ScanAsync_DoesNotRebuildTheFilteredCollectionForEveryEvent()
+    {
+        var events = Enumerable.Range(0, 200)
+            .Select(index => Record(
+                "pc01",
+                "user" + index,
+                "CORP",
+                2,
+                new DateTimeOffset(2025, 3, 4, 5, 0, 0, TimeSpan.Zero).AddMinutes(index)))
+            .ToArray();
+        var scanner = new FakeScanner((_, _, _, _) => Updates(
+            events.Select(item => (LogonScanUpdate)new LogonEventFound(item)).ToArray()));
+        var viewModel = new LogonHistoryViewModel(scanner) { ComputersText = "pc01" };
+        var filteredChanges = 0;
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(LogonHistoryViewModel.FilteredEvents)) filteredChanges++;
+        };
+
+        await viewModel.ScanAsync();
+
+        // The bound collection keeps its identity, so the grid is never handed a new item
+        // source and does not rebuild every row for every event.
+        Assert.Equal(0, filteredChanges);
+        Assert.Equal(200, viewModel.FilteredEvents.Count);
+        Assert.True(viewModel.HasVisibleEvents);
+    }
+
+    [Fact]
+    public async Task Filters_RebuildTheFilteredCollectionWithoutTouchingTheEventList()
+    {
+        var local = Record(
+            "pc01", "local-user", "PC01", 3, new DateTimeOffset(2025, 3, 4, 5, 0, 0, TimeSpan.Zero));
+        var domain = Record(
+            "pc01", "domain-user", "CORP", 2, new DateTimeOffset(2025, 3, 4, 5, 1, 0, TimeSpan.Zero));
+        var scanner = new FakeScanner((_, _, _, _) => Updates(
+            new LogonEventFound(local), new LogonEventFound(domain)));
+        var viewModel = new LogonHistoryViewModel(scanner) { ComputersText = "pc01" };
+
+        await viewModel.ScanAsync();
+
+        viewModel.AccountFilter = LogonAccountFilter.Local;
+        Assert.Equal(new[] { local }, viewModel.FilteredEvents);
+        Assert.Equal(2, viewModel.Events.Count);
+
+        viewModel.AccountFilter = LogonAccountFilter.All;
+        Assert.Equal(2, viewModel.FilteredEvents.Count);
+    }
+
     private static FakeScanner ScannerWithEvents(params LogonEventRecord[] events)
         => new((_, _, _, _) => Updates(
             events.Select(item => (LogonScanUpdate)new LogonEventFound(item))

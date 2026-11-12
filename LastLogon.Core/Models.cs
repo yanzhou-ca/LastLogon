@@ -1,6 +1,6 @@
 namespace LastLogon.Core;
 
-public enum ScanStatus { Ok, Offline, AccessDenied, NoProfile, Error }
+public enum ScanStatus { Ok, Offline, TimedOut, AccessDenied, NoProfile, Error }
 
 public enum ActivitySource { NtUserDat, Folder }
 

@@ -73,11 +73,22 @@ public class ProfileScannerTests
     }
 
     [Fact]
-    public async Task ScanComputer_Timeout_ReturnsOffline()
+    public async Task ScanComputer_Timeout_ReturnsTimedOut()
     {
         var fs = Basic(); fs.Delay = TimeSpan.FromSeconds(1);
         var r = await new ProfileScanner(fs, 8, TimeSpan.FromMilliseconds(100)).ScanComputerAsync("pc1", default);
-        Assert.Equal(ScanStatus.Offline, Assert.Single(r).Status);
+        Assert.Equal(ScanStatus.TimedOut, Assert.Single(r).Status);
+    }
+
+    [Fact]
+    public async Task ScanComputer_NoUserProfiles_ReportsNoProfile()
+    {
+        var fs = Basic();
+        fs.Folders["pc1"] = new() { "Public", "Default" };
+        var r = await new ProfileScanner(fs).ScanComputerAsync("pc1", default);
+        var row = Assert.Single(r);
+        Assert.Equal(ScanStatus.NoProfile, row.Status);
+        Assert.Equal("pc1", row.Computer);
     }
 
     [Fact]

@@ -53,6 +53,7 @@ public partial class ScanWindow : Window
             switch (e.PropertyName)
             {
                 case nameof(MainViewModel.IsScanning):
+                case nameof(MainViewModel.IsSearchingAd):
                     UpdateScanControls();
                     UpdateEmptyResultsState();
                     break;
@@ -83,7 +84,7 @@ public partial class ScanWindow : Window
                     if (LogonHistoryRadio.IsChecked == true) StatusLabel.Text = _historyVm.StatusText;
                     UpdateHistoryEmptyState();
                     break;
-                case nameof(LogonHistoryViewModel.FilteredEvents):
+                case nameof(LogonHistoryViewModel.HasVisibleEvents):
                     UpdateHistoryEmptyState();
                     break;
             }
@@ -218,7 +219,7 @@ public partial class ScanWindow : Window
     private void UpdateHistoryEmptyState()
     {
         if (HistoryEmptyPanel is null || _historyVm is null) return;
-        var noVisibleEvents = _historyVm.FilteredEvents.Count == 0;
+        var noVisibleEvents = !_historyVm.HasVisibleEvents;
         HistoryEmptyPanel.Visibility = noVisibleEvents ? Visibility.Visible : Visibility.Collapsed;
         HistoryEmptyLabel.Text = _historyVm.IsScanning
             ? "Querying Security logs…"
@@ -235,7 +236,7 @@ public partial class ScanWindow : Window
     private void UpdateScanControls()
     {
         if (ScanButton is null || CancelButton is null || Progress is null) return;
-        var isScanning = _vm.IsScanning || _historyVm.IsScanning;
+        var isScanning = _vm.IsScanning || _vm.IsSearchingAd || _historyVm.IsScanning;
         ScanButton.IsEnabled = !isScanning;
         CancelButton.IsEnabled = isScanning;
         Progress.Visibility = isScanning ? Visibility.Visible : Visibility.Collapsed;
@@ -285,47 +286,68 @@ public partial class ScanWindow : Window
 
     private void Copy_Click(object sender, RoutedEventArgs e)
     {
-        if (LogonHistoryRadio.IsChecked == true)
+        try
         {
-            var selectedEvents = HistoryEventsGrid.SelectedItems.OfType<LogonEventRecord>().ToList();
-            var rows = selectedEvents.Count > 0 ? selectedEvents : _historyVm.FilteredEvents;
-            var eventText = ResultExporter.ToLogonEventTabSeparated(rows);
-            if (eventText.Length > 0) Clipboard.SetText(eventText);
-            return;
-        }
+            if (LogonHistoryRadio.IsChecked == true)
+            {
+                var selectedEvents = HistoryEventsGrid.SelectedItems.OfType<LogonEventRecord>().ToList();
+                var rows = selectedEvents.Count > 0 ? selectedEvents : _historyVm.FilteredEvents.ToList();
+                var eventText = ResultExporter.ToLogonEventTabSeparated(rows);
+                if (eventText.Length > 0) Clipboard.SetText(eventText);
+                return;
+            }
 
-        var text = ResultExporter.ToTabSeparated(SelectedOrAll());
-        if (text.Length > 0) Clipboard.SetText(text);
+            var text = ResultExporter.ToTabSeparated(SelectedOrAll());
+            if (text.Length > 0) Clipboard.SetText(text);
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = "Could not copy to the clipboard: " + ex.Message;
+        }
     }
 
     private void Export_Click(object sender, RoutedEventArgs e)
     {
-        if (LogonHistoryRadio.IsChecked == true)
+        try
         {
-            var historyDialog = new SaveFileDialog
+            if (LogonHistoryRadio.IsChecked == true)
             {
-                FileName = "LogonHistory",
-                DefaultExt = ".csv",
-                Filter = "CSV (*.csv)|*.csv"
-            };
-            if (historyDialog.ShowDialog(this) != true) return;
-            File.WriteAllText(
-                historyDialog.FileName,
-                ResultExporter.ToLogonEventCsv(_historyVm.FilteredEvents),
-                new System.Text.UTF8Encoding(true));
-            return;
-        }
+                var historyDialog = new SaveFileDialog
+                {
+                    FileName = "LogonHistory",
+                    DefaultExt = ".csv",
+                    Filter = "CSV (*.csv)|*.csv"
+                };
+                if (historyDialog.ShowDialog(this) != true) return;
+                File.WriteAllText(
+                    historyDialog.FileName,
+                    ResultExporter.ToLogonEventCsv(_historyVm.FilteredEvents),
+                    new System.Text.UTF8Encoding(true));
+                return;
+            }
 
-        var dlg = new SaveFileDialog { FileName = "LastProfileActivity", DefaultExt = ".csv", Filter = "CSV (*.csv)|*.csv" };
-        if (dlg.ShowDialog(this) != true) return;
-        File.WriteAllText(dlg.FileName, ResultExporter.ToCsv(_vm.Results), new System.Text.UTF8Encoding(true));
+            var dlg = new SaveFileDialog { FileName = "LastProfileActivity", DefaultExt = ".csv", Filter = "CSV (*.csv)|*.csv" };
+            if (dlg.ShowDialog(this) != true) return;
+            File.WriteAllText(dlg.FileName, ResultExporter.ToCsv(_vm.Results), new System.Text.UTF8Encoding(true));
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = "Could not write the export file: " + ex.Message;
+        }
     }
 
     private void Import_Click(object sender, RoutedEventArgs e)
     {
         var dlg = new OpenFileDialog { Filter = "Text or CSV (*.txt;*.csv)|*.txt;*.csv|All files|*.*" };
         if (dlg.ShowDialog(this) != true) return;
-        ComputersBox.Text = File.ReadAllText(dlg.FileName);
+        try
+        {
+            ComputersBox.Text = File.ReadAllText(dlg.FileName);
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = "Could not read the file: " + ex.Message;
+        }
     }
 
     private async void FromAd_Click(object sender, RoutedEventArgs e)
@@ -338,7 +360,25 @@ public partial class ScanWindow : Window
     private void OpenFolder_Click(object sender, RoutedEventArgs e)
     {
         if (ResultsList.SelectedItem is not ProfileResult r || string.IsNullOrEmpty(r.Username)) return;
-        Process.Start(new ProcessStartInfo("explorer.exe", $"\"\\\\{r.Computer}\\C$\\Users\\{r.Username}\"") { UseShellExecute = true });
+
+        // The folder name comes from the scanned computer, and the computer name from the
+        // operator. Neither may be able to escape the path or the command line.
+        if (!InputParser.IsValidComputerName(r.Computer) || !InputParser.IsSafeProfileFolderName(r.Username))
+        {
+            StatusLabel.Text = "The selected profile folder cannot be opened because its name is not valid.";
+            return;
+        }
+
+        try
+        {
+            var startInfo = new ProcessStartInfo("explorer.exe") { UseShellExecute = true };
+            startInfo.ArgumentList.Add(ComputerTarget.UncPath(r.Computer, "Users", r.Username));
+            Process.Start(startInfo);
+        }
+        catch (Exception ex)
+        {
+            StatusLabel.Text = "Could not open the profile folder: " + ex.Message;
+        }
     }
 
     private static bool TryParseLocalDateTime(string text, out DateTimeOffset value)

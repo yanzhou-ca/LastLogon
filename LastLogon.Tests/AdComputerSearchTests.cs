@@ -13,3 +13,31 @@ public class AdComputerSearchTests
     public void BuildFilter_EmptyPrefix_MatchesAllComputers()
         => Assert.Equal("(&(objectCategory=computer)(name=*))", AdComputerSearch.BuildFilter(""));
 }
+
+public class AdDistinguishedNameTests
+{
+    private const string LocalContext = "DC=corp,DC=example";
+
+    [Theory]
+    [InlineData("OU=Sales")]
+    [InlineData("OU=Sales,OU=West")]
+    [InlineData("OU=Sales,DC=corp,DC=example")]
+    public void AcceptsNamesInsideTheLocalDomain(string dn)
+        => Assert.True(AdComputerSearch.IsValidDistinguishedName(dn, LocalContext));
+
+    [Theory]
+    [InlineData("evil.example.com/OU=Sales")]     // server component
+    [InlineData("LDAP://OU=Sales,DC=corp,DC=example")]
+    [InlineData("OU=Sales,DC=evil,DC=com")]        // another domain
+    [InlineData("OU=Sales/DC=corp")]              // server component in the middle
+    [InlineData("Sales")]                          // not a distinguished name
+    [InlineData("OU=")]                           // empty value
+    [InlineData("=Sales")]                        // empty type
+    [InlineData("OU=Sales\r\nX-Injected: 1")]     // control characters
+    public void RejectsNamesThatCouldRedirectTheBind(string dn)
+        => Assert.False(AdComputerSearch.IsValidDistinguishedName(dn, LocalContext));
+
+    [Fact]
+    public void RejectsEveryNameWhenTheLocalContextIsUnknown()
+        => Assert.False(AdComputerSearch.IsValidDistinguishedName("OU=Sales,DC=corp,DC=example", ""));
+}

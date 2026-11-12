@@ -17,8 +17,17 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
         "WINDOW MANAGER"
     };
 
+    /// <summary>The longest time range a single scan may cover.</summary>
+    public static readonly TimeSpan DefaultMaxRange = TimeSpan.FromDays(90);
+
+    /// <summary>The largest number of events a single scan keeps.</summary>
+    public const int DefaultMaxEvents = 50_000;
+
+    private readonly ObservableCollection<LogonEventRecord> _filtered = new();
     private readonly ILogonEventScanner _scanner;
     private readonly Action<Action> _dispatch;
+    private readonly TimeSpan _maxRange;
+    private readonly int _maxEvents;
     private CancellationTokenSource? _cancellation;
     private string _computersText = "";
     private DateTimeOffset _startLocal;
@@ -28,12 +37,21 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
     private LogonTypeFilter _typeFilter;
     private bool _isScanning;
     private string _statusText = "Ready";
+    private bool _isTruncated;
 
-    public LogonHistoryViewModel(ILogonEventScanner scanner, Action<Action>? dispatch = null)
+    public LogonHistoryViewModel(
+        ILogonEventScanner scanner,
+        Action<Action>? dispatch = null,
+        TimeSpan? maxRange = null,
+        int maxEvents = DefaultMaxEvents)
     {
         ArgumentNullException.ThrowIfNull(scanner);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEvents);
+
         _scanner = scanner;
         _dispatch = dispatch ?? (action => action());
+        _maxRange = maxRange ?? DefaultMaxRange;
+        _maxEvents = maxEvents;
         _endLocal = DateTimeOffset.Now;
         _startLocal = _endLocal.AddDays(-3);
     }
@@ -42,6 +60,21 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
 
     public ObservableCollection<LogonEventRecord> Events { get; } = new();
     public ObservableCollection<LogonComputerCompleted> ComputerStatuses { get; } = new();
+
+    /// <summary>
+    /// The events that pass the current filters, newest first.
+    /// <para>
+    /// The collection instance never changes, so the grid keeps a single item source and each
+    /// new event is added to it instead of the whole list being rebuilt and re-sorted.
+    /// </para>
+    /// </summary>
+    public IReadOnlyList<LogonEventRecord> FilteredEvents => _filtered;
+
+    /// <summary>True when at least one event passes the current filters.</summary>
+    public bool HasVisibleEvents => _filtered.Count > 0;
+
+    /// <summary>True when the scan stopped early because it reached the event limit.</summary>
+    public bool IsTruncated => _isTruncated;
 
     public string ComputersText
     {
@@ -76,9 +109,6 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
     public IReadOnlyList<KeyValuePair<string, string>> SelectedDetails
         => _selectedEvent?.Data.ToArray() ?? Array.Empty<KeyValuePair<string, string>>();
 
-    public IReadOnlyList<LogonEventRecord> FilteredEvents
-        => Events.Where(IsVisible).ToArray();
-
     public LogonAccountFilter AccountFilter
     {
         get => _accountFilter;
@@ -86,7 +116,7 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
         {
             if (Set(ref _accountFilter, value))
             {
-                OnPropertyChanged(nameof(FilteredEvents));
+                ApplyFilters();
             }
         }
     }
@@ -98,7 +128,7 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
         {
             if (Set(ref _typeFilter, value))
             {
-                OnPropertyChanged(nameof(FilteredEvents));
+                ApplyFilters();
             }
         }
     }
@@ -143,6 +173,12 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
             return;
         }
 
+        if (EndLocal - StartLocal > _maxRange)
+        {
+            StatusText = $"The time range must not exceed {_maxRange.TotalDays:F0} days.";
+            return;
+        }
+
         ClearResults();
         _cancellation?.Dispose();
         var cancellation = new CancellationTokenSource();
@@ -156,18 +192,26 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
 
         try
         {
+            var received = 0;
             await foreach (var update in _scanner.ScanAsync(computers, fromUtc, toUtc, cancellationToken))
             {
                 switch (update)
                 {
                     case LogonEventFound found:
-                        _dispatch(() =>
+                        if (received >= _maxEvents)
                         {
-                            Insert(found.Event);
-                            OnPropertyChanged(nameof(FilteredEvents));
-                        });
+                            // The remote log holds more events than this tool keeps. Stop reading
+                            // and say so, rather than growing without bound.
+                            _isTruncated = true;
+                            OnPropertyChanged(nameof(IsTruncated));
+                            cancellation.Cancel();
+                            break;
+                        }
+                        received++;
+                        _dispatch(() => Insert(found.Event));
                         break;
                     case LogonComputerCompleted completed:
+                        if (completed.Truncated) _isTruncated = true;
                         _dispatch(() => ComputerStatuses.Add(completed));
                         break;
                 }
@@ -175,9 +219,11 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
 
             var successful = ComputerStatuses.Count(item => item.Status == LogonQueryStatus.Success);
             var failed = ComputerStatuses.Count - successful;
-            StatusText = cancellationToken.IsCancellationRequested
-                ? $"Cancelled. {Events.Count} event(s); {failed} incomplete computer(s)."
-                : $"Done. {Events.Count} event(s); {successful} succeeded, {failed} failed.";
+            StatusText = _isTruncated
+                ? $"Stopped at the {_maxEvents} event limit. {Events.Count} event(s) collected; results are incomplete."
+                : cancellationToken.IsCancellationRequested
+                    ? $"Cancelled. {Events.Count} event(s); {failed} incomplete computer(s)."
+                    : $"Done. {Events.Count} event(s); {successful} succeeded, {failed} failed.";
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -202,23 +248,59 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
     private void ClearResults()
     {
         SelectedEvent = null;
+        _isTruncated = false;
         _dispatch(() =>
         {
             Events.Clear();
+            _filtered.Clear();
             ComputerStatuses.Clear();
-            OnPropertyChanged(nameof(FilteredEvents));
+            OnPropertyChanged(nameof(IsTruncated));
+            OnPropertyChanged(nameof(HasVisibleEvents));
+        });
+    }
+
+    /// <summary>Rebuilds the filtered collection after the account or logon type filter changed.</summary>
+    private void ApplyFilters()
+    {
+        _dispatch(() =>
+        {
+            _filtered.Clear();
+            foreach (var record in Events)
+            {
+                if (IsVisible(record)) _filtered.Add(record);
+            }
+
+            OnPropertyChanged(nameof(HasVisibleEvents));
         });
     }
 
     private void Insert(LogonEventRecord eventRecord)
     {
-        var index = 0;
-        while (index < Events.Count && Events[index].TimeUtc >= eventRecord.TimeUtc)
+        Events.Insert(FindInsertionIndex(Events, eventRecord.TimeUtc), eventRecord);
+
+        if (IsVisible(eventRecord))
         {
-            index++;
+            _filtered.Insert(FindInsertionIndex(_filtered, eventRecord.TimeUtc), eventRecord);
+            if (_filtered.Count == 1) OnPropertyChanged(nameof(HasVisibleEvents));
+        }
+    }
+
+    /// <summary>
+    /// Finds the position of an event in a collection that is ordered newest first. Events with
+    /// the same timestamp keep the order in which they arrived.
+    /// </summary>
+    private static int FindInsertionIndex(IReadOnlyList<LogonEventRecord> items, DateTimeOffset timeUtc)
+    {
+        var low = 0;
+        var high = items.Count;
+        while (low < high)
+        {
+            var middle = low + (high - low) / 2;
+            if (items[middle].TimeUtc >= timeUtc) low = middle + 1;
+            else high = middle;
         }
 
-        Events.Insert(index, eventRecord);
+        return low;
     }
 
     private bool IsVisible(LogonEventRecord eventRecord)

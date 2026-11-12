@@ -16,13 +16,13 @@ public static class ResultExporter
 
     public static string ToCsv(IEnumerable<ProfileResult> rows) => Build(rows, ",", Csv);
 
-    public static string ToTabSeparated(IEnumerable<ProfileResult> rows) => Build(rows, "\t", s => s.Replace('\t', ' '));
+    public static string ToTabSeparated(IEnumerable<ProfileResult> rows) => Build(rows, "\t", TabSeparated);
 
     public static string ToLogonEventCsv(IEnumerable<LogonEventRecord> rows)
         => BuildLogonEvents(rows, ",", Csv);
 
     public static string ToLogonEventTabSeparated(IEnumerable<LogonEventRecord> rows)
-        => BuildLogonEvents(rows, "\t", s => s.Replace('\t', ' '));
+        => BuildLogonEvents(rows, "\t", TabSeparated);
 
     private static string Build(IEnumerable<ProfileResult> rows, string sep, Func<string, string> esc)
     {
@@ -78,6 +78,22 @@ public static class ResultExporter
     {
         if (HasFormulaPrefix(s)) s = "'" + s;
         return s.IndexOfAny(new[] { ',', '"', '\r', '\n' }) >= 0 ? "\"" + s.Replace("\"", "\"\"") + "\"" : s;
+    }
+
+    /// <summary>
+    /// Escapes a value for tab-separated output.
+    /// <para>
+    /// Tab-separated text is pasted straight into a spreadsheet, which has no quoting rules: a
+    /// cell that starts with a formula trigger is evaluated, and a value containing a line
+    /// break starts a new row. Both are neutralised here so that the clipboard output cannot
+    /// execute anything in the receiving spreadsheet or forge rows.
+    /// </para>
+    /// </summary>
+    private static string TabSeparated(string s)
+    {
+        s = s.Replace('\t', ' ').Replace("\r", " ").Replace("\n", " ");
+        if (HasFormulaPrefix(s)) s = "'" + s;
+        return s;
     }
 
     private static bool HasFormulaPrefix(string value)

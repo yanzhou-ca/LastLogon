@@ -39,6 +39,66 @@ public class ResultExporterTests
     public void ToTabSeparated_HasHeaderRow()
         => Assert.StartsWith("Computer\tUsername\tLastProfileActivity", ResultExporter.ToTabSeparated(new[] { R(null) }));
 
+    [Theory]
+    [InlineData("=1+1")]
+    [InlineData("+1+1")]
+    [InlineData("-1+1")]
+    [InlineData("@SUM(1)")]
+    [InlineData(" =cmd|'/c calc'!A0")]
+    public void ToTabSeparated_NeutralisesFormulaLeadingTextCells(string untrusted)
+    {
+        var row = new ProfileResult(untrusted, untrusted, null, null, ScanStatus.Error, untrusted);
+        var line = ResultExporter.ToTabSeparated(new[] { row }).Split("\r\n")[1];
+        var cells = line.Split('\t');
+
+        // The computer, the username and the message carry the untrusted text. The leading
+        // apostrophe is what stops the receiving spreadsheet from evaluating them.
+        foreach (var index in new[] { 0, 1, 6 })
+        {
+            Assert.StartsWith("'", cells[index]);
+            Assert.Equal("'" + untrusted, cells[index]);
+        }
+    }
+
+    [Fact]
+    public void ToTabSeparated_RemovesLineBreaksSoRowsCannotBeForged()
+    {
+        var row = new ProfileResult("pc1", "alice\r\n=cmd|'/c calc'!A0", null, null, ScanStatus.Ok, null);
+        var tsv = ResultExporter.ToTabSeparated(new[] { row });
+        var lines = tsv.Split("\r\n");
+
+        // A header and a single data row: the value must not be able to start another one.
+        Assert.Equal(3, lines.Length);
+        Assert.True(lines[2].Length == 0);
+        Assert.DoesNotContain('\n', lines[1]);
+        Assert.DoesNotContain('\r', lines[1]);
+
+        // The whole value stays in one cell, where it is plain text and not a formula.
+        var username = lines[1].Split('\t')[1];
+        Assert.False(username.StartsWith("="));
+    }
+
+    [Fact]
+    public void ToLogonEventTabSeparated_NeutralisesFormulaLeadingTextCells()
+    {
+        var row = new LogonEventRecord(
+            "pc01",
+            new DateTimeOffset(2025, 3, 4, 5, 6, 7, TimeSpan.Zero),
+            4624,
+            "Successful logon",
+            "=HYPERLINK('http://evil.tld','x')",
+            null,
+            null,
+            null,
+            null,
+            null,
+            new Dictionary<string, string>());
+
+        var cells = ResultExporter.ToLogonEventTabSeparated(new[] { row }).Split("\r\n")[1].Split('\t');
+
+        Assert.Equal("'=HYPERLINK('http://evil.tld','x')", cells[5]);
+    }
+
     [Fact]
     public void ToLogonEventCsv_HasFixedHeaderAndEventFields()
     {

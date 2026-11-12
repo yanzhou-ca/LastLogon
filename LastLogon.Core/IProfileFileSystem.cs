@@ -1,6 +1,3 @@
-using System.Net;
-using System.Net.NetworkInformation;
-
 namespace LastLogon.Core;
 
 public interface IProfileFileSystem
@@ -22,27 +19,10 @@ public sealed class SmbProfileFileSystem : IProfileFileSystem
         if (names.Count != 1 || !names[0].Equals(computer, StringComparison.OrdinalIgnoreCase))
             throw new ArgumentException("Only a short computer hostname can be scanned.", nameof(computer));
 
-        var domain = Environment.GetEnvironmentVariable("USERDNSDOMAIN");
-        if (string.IsNullOrWhiteSpace(domain))
-            domain = IPGlobalProperties.GetIPGlobalProperties().DomainName;
-        domain = domain?.Trim().TrimEnd('.');
-        if (!IsValidDnsDomain(domain))
+        if (!ComputerTarget.IsValidDnsDomain(ComputerTarget.DnsDomain))
             throw new InvalidOperationException("The current DNS domain could not be determined.");
 
-        return $@"\\{computer}.{domain}\C$\Users";
-    }
-
-    private static bool IsValidDnsDomain(string? domain)
-    {
-        if (string.IsNullOrWhiteSpace(domain) || domain.Length > 253
-            || Uri.CheckHostName(domain) != UriHostNameType.Dns)
-            return false;
-
-        return domain.Split('.').All(label =>
-            label.Length is > 0 and <= 63
-            && char.IsAsciiLetterOrDigit(label[0])
-            && char.IsAsciiLetterOrDigit(label[^1])
-            && label.All(c => char.IsAsciiLetterOrDigit(c) || c == '-'));
+        return ComputerTarget.UncPath(computer, "Users");
     }
 
     public IReadOnlyList<string> ListUserFolders(string computer)
@@ -50,11 +30,29 @@ public sealed class SmbProfileFileSystem : IProfileFileSystem
 
     public DateTime? GetNtUserDatTime(string computer, string user)
     {
-        var fi = new FileInfo(Path.Combine(Root(computer), user, "NTUSER.DAT"));
-        // -Force equivalent: FileInfo sees hidden/system files
-        return fi.Exists ? fi.LastWriteTime : null;
+        var path = Path.Combine(Root(computer), SafeSegment(user), "NTUSER.DAT");
+
+        try
+        {
+            // File.GetAttributes tells a missing file apart from a file that cannot be read.
+            // FileInfo.Exists answers "false" for both, which would report an access failure
+            // as "NTUSER.DAT not found" and silently fall back to the folder time.
+            File.GetAttributes(path);
+        }
+        catch (FileNotFoundException) { return null; }
+        catch (DirectoryNotFoundException) { return null; }
+
+        return new FileInfo(path).LastWriteTime;
     }
 
     public DateTime GetFolderTime(string computer, string user)
-        => Directory.GetLastWriteTime(Path.Combine(Root(computer), user));
+        => Directory.GetLastWriteTime(Path.Combine(Root(computer), SafeSegment(user)));
+
+    private static string SafeSegment(string user)
+    {
+        if (!InputParser.IsSafeProfileFolderName(user))
+            throw new ArgumentException("Only a plain profile folder name can be read.", nameof(user));
+
+        return user;
+    }
 }

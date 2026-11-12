@@ -16,4 +16,8 @@
     <PackageReference Include="System.DirectoryServices" Version="8.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="LastLogon.Tests" />
+  </ItemGroup>
+
 </Project>

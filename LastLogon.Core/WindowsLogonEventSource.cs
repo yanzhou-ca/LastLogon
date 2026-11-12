@@ -15,7 +15,9 @@ public sealed class WindowsLogonEventSource : ILogonEventSource
     {
         cancellationToken.ThrowIfCancellationRequested();
 
-        using var session = new EventLogSession(computer);
+        // Address the host the same way the SMB scan does, so that a short name cannot be
+        // resolved to a different machine by short-name resolution.
+        using var session = new EventLogSession(ComputerTarget.Qualify(computer));
         var query = new EventLogQuery("Security", PathType.LogName, BuildXPath(fromUtc, toUtc))
         {
             Session = session

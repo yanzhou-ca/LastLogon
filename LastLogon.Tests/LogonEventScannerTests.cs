@@ -1,3 +1,4 @@
+using System.Diagnostics.Eventing.Reader;
 using LastLogon.Core;
 
 namespace LastLogon.Tests;
@@ -190,7 +191,49 @@ public class LogonEventScannerTests
         var completions = updates.OfType<LogonComputerCompleted>().ToArray();
 
         Assert.Equal(new[] { "pc01", "pc02" }, completions.Select(item => item.Computer).OrderBy(name => name));
-        Assert.All(completions, item => Assert.Equal(LogonQueryStatus.Error, item.Status));
+        Assert.All(completions, item => Assert.Equal(LogonQueryStatus.Cancelled, item.Status));
+    }
+
+    [Fact]
+    public async Task ScanAsync_StopsReadingAHostThatFloodsTheLog()
+    {
+        var source = new DelegateSource((_, _) => Enumerable.Range(0, 500).Select(_ => EventXml));
+        var scanner = new LogonEventScanner(source, maxEventsPerComputer: 25);
+
+        var updates = await CollectAsync(scanner, new[] { "pc01" });
+
+        var completion = CompletionFor(updates, "pc01");
+        Assert.Equal(LogonQueryStatus.Success, completion.Status);
+        Assert.True(completion.Truncated);
+        Assert.Equal(25, completion.EventCount);
+    }
+
+    [Fact]
+    public async Task ScanAsync_KeepsReadingAfterARecordThatCannotBeParsed()
+    {
+        var source = new DelegateSource((_, _) => new[] { "not xml at all", EventXml, "<Event />" });
+        var scanner = new LogonEventScanner(source);
+
+        var updates = await CollectAsync(scanner, new[] { "pc01" });
+
+        var completion = CompletionFor(updates, "pc01");
+        Assert.Equal(LogonQueryStatus.Success, completion.Status);
+        Assert.Equal(1, completion.EventCount);
+        Assert.Contains("could not be read", completion.Message);
+    }
+
+    [Fact]
+    public async Task ScanAsync_ReportsAnUnreachableHostAsOffline()
+    {
+        var source = new DelegateSource((_, _) => throw new EventLogException("The RPC server is unavailable.")
+        {
+            HResult = unchecked((int)0x800706BA)
+        });
+        var scanner = new LogonEventScanner(source);
+
+        var updates = await CollectAsync(scanner, new[] { "pc01" });
+
+        Assert.Equal(LogonQueryStatus.Offline, CompletionFor(updates, "pc01").Status);
     }
 
     private static readonly string EventXml = """

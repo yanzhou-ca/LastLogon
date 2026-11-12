@@ -1,3 +1,4 @@
+using System.Diagnostics.Eventing.Reader;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 
@@ -9,6 +10,7 @@ public enum LogonQueryStatus
     AccessDenied,
     Offline,
     TimedOut,
+    Cancelled,
     Error
 }
 
@@ -20,7 +22,8 @@ public sealed record LogonComputerCompleted(
     string Computer,
     LogonQueryStatus Status,
     string? Message,
-    int EventCount) : LogonScanUpdate;
+    int EventCount,
+    bool Truncated = false) : LogonScanUpdate;
 
 public interface ILogonEventScanner
 {
@@ -33,17 +36,26 @@ public interface ILogonEventScanner
 
 public sealed class LogonEventScanner : ILogonEventScanner
 {
+    /// <summary>The RPC error Windows returns when the remote Event Log service cannot be reached.</summary>
+    private const uint RpcServerUnavailable = 0x800706BA;
+
+    /// <summary>How long a reader that was interrupted may take to actually stop.</summary>
+    private static readonly TimeSpan ReaderShutdownGrace = TimeSpan.FromSeconds(30);
+
     private readonly ILogonEventSource _source;
     private readonly int _maxParallel;
     private readonly TimeSpan _perComputerTimeout;
+    private readonly int _maxEventsPerComputer;
 
     public LogonEventScanner(
         ILogonEventSource source,
         int maxParallel = 4,
-        TimeSpan? perComputerTimeout = null)
+        TimeSpan? perComputerTimeout = null,
+        int maxEventsPerComputer = 50_000)
     {
         ArgumentNullException.ThrowIfNull(source);
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxParallel);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxEventsPerComputer);
 
         var timeout = perComputerTimeout ?? TimeSpan.FromSeconds(10);
         if (timeout <= TimeSpan.Zero)
@@ -54,6 +66,7 @@ public sealed class LogonEventScanner : ILogonEventScanner
         _source = source;
         _maxParallel = maxParallel;
         _perComputerTimeout = timeout;
+        _maxEventsPerComputer = maxEventsPerComputer;
     }
 
     public async IAsyncEnumerable<LogonScanUpdate> ScanAsync(
@@ -104,7 +117,7 @@ public sealed class LogonEventScanner : ILogonEventScanner
         {
             writer.TryWrite(new LogonComputerCompleted(
                 computer,
-                LogonQueryStatus.Error,
+                LogonQueryStatus.Cancelled,
                 "Scan cancelled before the query started.",
                 0));
             return;
@@ -112,9 +125,16 @@ public sealed class LogonEventScanner : ILogonEventScanner
 
         try
         {
-            using var timeoutCancellation = CancellationTokenSource.CreateLinkedTokenSource(scanCancellationToken);
-            timeoutCancellation.CancelAfter(_perComputerTimeout);
+            // A separate source for the timeout keeps "the query ran out of time" apart from
+            // "the operator cancelled the scan": both cancel the same linked token.
+            using var timeoutSource = new CancellationTokenSource(_perComputerTimeout);
+            using var queryCancellation =
+                CancellationTokenSource.CreateLinkedTokenSource(scanCancellationToken, timeoutSource.Token);
+
             var eventCount = 0;
+            var truncated = 0;
+            var skipped = 0;
+
             var readTask = Task.Run<Exception?>(() =>
             {
                 try
@@ -123,16 +143,37 @@ public sealed class LogonEventScanner : ILogonEventScanner
                         computer,
                         fromUtc,
                         toUtc,
-                        timeoutCancellation.Token))
+                        queryCancellation.Token))
                     {
-                        timeoutCancellation.Token.ThrowIfCancellationRequested();
-                        var record = LogonEventParser.Parse(computer, eventXml);
+                        queryCancellation.Token.ThrowIfCancellationRequested();
+
+                        LogonEventRecord record;
+                        try
+                        {
+                            record = LogonEventParser.Parse(computer, eventXml);
+                        }
+                        catch (FormatException)
+                        {
+                            // One record that cannot be read must not throw away the rest of
+                            // the machine's history.
+                            Interlocked.Increment(ref skipped);
+                            continue;
+                        }
+
                         if (!writer.TryWrite(new LogonEventFound(record)))
                         {
                             return null;
                         }
 
                         Interlocked.Increment(ref eventCount);
+
+                        // Stop reading a host that floods the log. Leaving the enumeration here
+                        // disposes the reader, which ends the remote query.
+                        if (Volatile.Read(ref eventCount) >= _maxEventsPerComputer)
+                        {
+                            Volatile.Write(ref truncated, 1);
+                            break;
+                        }
                     }
 
                     return null;
@@ -145,33 +186,39 @@ public sealed class LogonEventScanner : ILogonEventScanner
 
             try
             {
-                var readError = await readTask.WaitAsync(timeoutCancellation.Token);
+                var readError = await readTask.WaitAsync(queryCancellation.Token);
                 var (status, message) = readError is null
                     ? (LogonQueryStatus.Success, (string?)null)
-                    : GetFailure(readError);
+                    : GetFailure(
+                        readError,
+                        timedOut: timeoutSource.IsCancellationRequested,
+                        cancelled: scanCancellationToken.IsCancellationRequested);
                 writer.TryWrite(new LogonComputerCompleted(
                     computer,
                     status,
-                    message,
-                    Volatile.Read(ref eventCount)));
+                    Describe(message, Volatile.Read(ref skipped), Volatile.Read(ref truncated) == 1),
+                    Volatile.Read(ref eventCount),
+                    Volatile.Read(ref truncated) == 1));
             }
             catch (OperationCanceledException) when (scanCancellationToken.IsCancellationRequested)
             {
                 writer.TryWrite(new LogonComputerCompleted(
                     computer,
-                    LogonQueryStatus.Error,
+                    LogonQueryStatus.Cancelled,
                     "Scan cancelled before the query finished.",
-                    Volatile.Read(ref eventCount)));
-                await readTask;
+                    Volatile.Read(ref eventCount),
+                    Volatile.Read(ref truncated) == 1));
+                await WaitForReaderAsync(readTask);
             }
-            catch (OperationCanceledException) when (timeoutCancellation.IsCancellationRequested)
+            catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
             {
                 writer.TryWrite(new LogonComputerCompleted(
                     computer,
                     LogonQueryStatus.TimedOut,
                     $"Timed out after {_perComputerTimeout.TotalSeconds:0.##} seconds.",
-                    Volatile.Read(ref eventCount)));
-                await readTask;
+                    Volatile.Read(ref eventCount),
+                    Volatile.Read(ref truncated) == 1));
+                await WaitForReaderAsync(readTask);
             }
         }
         finally
@@ -180,10 +227,52 @@ public sealed class LogonEventScanner : ILogonEventScanner
         }
     }
 
-    private static (LogonQueryStatus Status, string Message) GetFailure(Exception exception)
+    /// <summary>
+    /// Waits for a reader that was interrupted to actually stop, but only for a bounded grace
+    /// period. The slot is held until then so that the number of live queries stays bounded, and
+    /// a host that never answers cannot keep the scan waiting forever.
+    /// </summary>
+    private static async Task WaitForReaderAsync(Task readTask)
+    {
+        try
+        {
+            await readTask.WaitAsync(ReaderShutdownGrace);
+        }
+        catch (TimeoutException)
+        {
+            // The reader is stuck in a call that cannot be interrupted. The read task observes
+            // its own exception, so it is safe to leave it running.
+        }
+        catch (Exception)
+        {
+        }
+    }
+
+    /// <summary>
+    /// Adds the caveats that make a result set easier to read correctly: records that could not
+    /// be parsed and a result set that was cut short.
+    /// </summary>
+    private static string? Describe(string? message, int skipped, bool truncated)
+    {
+        var notes = new List<string>();
+        if (message is not null) notes.Add(message);
+        if (skipped > 0) notes.Add($"{skipped} record(s) could not be read and were skipped.");
+        if (truncated) notes.Add("The event limit was reached; the results are incomplete.");
+        return notes.Count == 0 ? null : string.Join(" ", notes);
+    }
+
+    private static (LogonQueryStatus Status, string Message) GetFailure(
+        Exception exception,
+        bool timedOut,
+        bool cancelled)
         => exception switch
         {
             UnauthorizedAccessException => (LogonQueryStatus.AccessDenied, "Access denied."),
+            OperationCanceledException when cancelled => (LogonQueryStatus.Cancelled, "Scan cancelled."),
+            OperationCanceledException when timedOut => (LogonQueryStatus.TimedOut, "The query timed out."),
+            EventLogException ex when (uint)ex.HResult == RpcServerUnavailable =>
+                (LogonQueryStatus.Offline, "The computer is unreachable."),
+            EventLogException ex => (LogonQueryStatus.Error, ex.Message),
             DirectoryNotFoundException => (LogonQueryStatus.Offline, "Computer or Security log was not found."),
             IOException => (LogonQueryStatus.Offline, exception.Message),
             TimeoutException => (LogonQueryStatus.TimedOut, exception.Message),

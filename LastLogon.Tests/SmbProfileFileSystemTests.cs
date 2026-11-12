@@ -31,6 +31,18 @@ public class SmbProfileFileSystemTests
             Assert.Throws<InvalidOperationException>(() => InvokeRoot("pc01")));
     }
 
+    [Fact]
+    public void Root_RejectsProfileNameThatCouldEscapeTheShare()
+    {
+        WithDnsDomain("corp.example", () =>
+        {
+            var method = typeof(SmbProfileFileSystem).GetMethod("GetFolderTime")!;
+            var exception = Assert.Throws<TargetInvocationException>(() =>
+                method.Invoke(new SmbProfileFileSystem(), new object[] { "pc01", "..\\..\\Windows" }));
+            Assert.IsType<ArgumentException>(exception.InnerException);
+        });
+    }
+
     private static string InvokeRoot(string computer)
     {
         var method = typeof(SmbProfileFileSystem).GetMethod("Root", BindingFlags.NonPublic | BindingFlags.Static)!;
@@ -47,15 +59,15 @@ public class SmbProfileFileSystemTests
 
     private static void WithDnsDomain(string domain, Action action)
     {
-        var previous = Environment.GetEnvironmentVariable("USERDNSDOMAIN");
+        var previous = ComputerTarget.DnsDomain;
         try
         {
-            Environment.SetEnvironmentVariable("USERDNSDOMAIN", domain);
+            ComputerTarget.DnsDomain = domain;
             action();
         }
         finally
         {
-            Environment.SetEnvironmentVariable("USERDNSDOMAIN", previous);
+            ComputerTarget.DnsDomain = previous;
         }
     }
 }
