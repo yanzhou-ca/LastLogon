@@ -35,7 +35,7 @@ Working with the results:
 ## Requirements
 
 - Windows 10 or 11, 64-bit.
-- The **.NET 8 Desktop Runtime** for the framework-dependent download. Microsoft ended support for .NET 8 on 10 November 2026. The self-contained build in [docs/publishing.md](docs/publishing.md) avoids needing the runtime.
+- The **.NET 10 Desktop Runtime** for the framework-dependent download. A computer that has only the .NET 8 runtime cannot start it. Microsoft supports .NET 10 until 14 November 2028. The self-contained build in [docs/publishing.md](docs/publishing.md) avoids needing the runtime.
 - Run the tool as an administrator. The account you use needs administrator rights on each target computer.
 - For **Logon history**, the target computers need the *Remote Event Log Management* firewall rules enabled, and logon auditing turned on.
 
@@ -47,7 +47,7 @@ The executable is not code-signed, so Windows SmartScreen may warn the first tim
 
 ## Build from source
 
-You need the .NET 8 SDK on Windows.
+You need the .NET 10 SDK on Windows.
 
 ```powershell
 dotnet restore LastLogon.slnx --use-lock-file

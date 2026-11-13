@@ -18,6 +18,7 @@ All notable changes to LastLogon are listed here. The format follows [Keep a Cha
 
 ### Changed
 
+- **LastLogon now needs the .NET 10 Desktop Runtime**, where it needed .NET 8 before. A computer that has only the .NET 8 runtime can no longer start it, so install .NET 10 there first. The self-contained build needs no runtime. Microsoft ended support for .NET 8 on 10 November 2026. Building from source needs the .NET 10 SDK.
 - **Scan** and **Cancel** moved to the top right, beside the choice of lookup, so that they stay in the same place in every lookup. Esc cancels a running scan.
 - The cursor starts in the first input. In the Tab order the inputs come first and the dropdown that sets how a computer is addressed comes after them. The Active Directory dialog opens with its first field ready.
 - The table says "NTUSER.DAT", "OK", "Access denied" and "No profile" instead of the names of internal values. A row whose time came only from the folder says "Approximate" instead of "OK".

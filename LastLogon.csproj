@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
     <TargetPlatformMinVersion>10.0.17763.0</TargetPlatformMinVersion>
     <RootNamespace>LastLogon</RootNamespace>
     <Version>1.0.1</Version>
@@ -32,18 +32,21 @@
   </ItemGroup>
 
   <!--
-    The windows10.0.19041.0 target framework pulls in the Windows SDK projections
-    (Microsoft.Windows.SDK.NET.dll, 24 MB of WinRT metadata plus WinRT.Runtime.dll). This
-    application is plain WPF and never calls a WinRT API, so the projections are removed from
-    the framework references and never end up in the build output.
+    The windows10.0.19041.0 target framework adds the Windows SDK projections as a framework
+    reference: Microsoft.Windows.SDK.NET.dll (24 MB of WinRT metadata) and WinRT.Runtime.dll, from
+    the Microsoft.Windows.SDK.NET.Ref pack. This application is plain WPF and never calls a WinRT
+    API, so the SDK is told not to add that reference. The compiler is then not handed the
+    projections, and they never end up in the build output.
+
+    This replaces a target that removed the pack's known framework reference by its name. The
+    .NET 10 SDK names those references differently, so that target stopped doing anything and
+    gave no message, and removing only the known references leaves a framework reference that the
+    SDK rejects (NETSDK1073). The restore still downloads the pack (12 MB), as it does the other
+    known framework packs, in case a package refers to them; nothing in the build uses it.
   -->
-  <Target Name="RemoveWindowsSdkFrameworkReference"
-          AfterTargets="AddWindowsSdkKnownFrameworkReferences"
-          BeforeTargets="ProcessFrameworkReferences">
-    <ItemGroup>
-      <KnownFrameworkReference Remove="Microsoft.Windows.SDK.NET.Ref" />
-    </ItemGroup>
-  </Target>
+  <PropertyGroup>
+    <IncludeWindowsSDKRefFrameworkReferences>false</IncludeWindowsSDKRefFrameworkReferences>
+  </PropertyGroup>
 
   <!-- The icon of the program: the executable carries it, and the windows show the same file. -->
   <ItemGroup>

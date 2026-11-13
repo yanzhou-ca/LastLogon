@@ -4,8 +4,8 @@ Two shapes are available. Both produce a single executable.
 
 | Profile | Size | Needs on the target machine |
 |---|---|---|
-| `win-<platform>` (default) | ~0.3 MB | the .NET 8 Desktop Runtime |
-| `standalone-win-<platform>` | ~60 MB | nothing |
+| `win-<platform>` (default) | ~0.4 MB | the .NET 10 Desktop Runtime |
+| `standalone-win-<platform>` | ~55-60 MB | nothing |
 
 The default build is framework dependent: it carries only this application and relies on the
 .NET Desktop Runtime that is already present on managed Windows machines. The standalone build
@@ -37,13 +37,14 @@ derived from the runtime identifier.
 
 ## Why the payload is what it is
 
-The application itself is 260 KB. Everything else is the framework.
+The application itself is about 220 KB. Everything else is the framework.
 
-* **The Windows SDK projections are not included.** The `net8.0-windows10.0.19041.0` target
-  framework pulls in `Microsoft.Windows.SDK.NET.dll` (24 MB of WinRT metadata) and
-  `WinRT.Runtime.dll`. This application is plain WPF and never calls a WinRT API, so the
-  `RemoveWindowsSdkFrameworkReference` target in `LastLogon.csproj` drops that framework
-  reference before it is processed.
+* **The Windows SDK projections are not included.** The `net10.0-windows10.0.19041.0` target
+  framework adds `Microsoft.Windows.SDK.NET.dll` (24 MB of WinRT metadata) and
+  `WinRT.Runtime.dll` as a framework reference. This application is plain WPF and never calls
+  a WinRT API, so `LastLogon.csproj` sets `IncludeWindowsSDKRefFrameworkReferences` to `false`,
+  and the compiler is never handed them. The restore still downloads the pack they come from
+  (12 MB), with the other known framework packs; nothing in the build uses it.
 * **ReadyToRun is off.** It adds about 55 MB to the payload and only shortens the start of a
   tool that is used a handful of times a day.
 * **Trimming is off and has to stay off.** WPF cannot be trimmed; a trimmed build fails at
