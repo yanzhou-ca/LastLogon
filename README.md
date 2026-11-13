@@ -63,4 +63,6 @@ The published file is written to `publish\win-x64\LastLogon.exe`. [docs/publishi
 
 ## Status
 
-No license has been chosen yet. Until one is added, the code is public but nobody has been granted permission to reuse it.
+Copyright (C) 2026 Yan.
+
+LastLogon is free software, licensed under the [GNU General Public License, version 3 or later](LICENSE). You may use, study, change and share it under those terms. The program comes with no warranty.
