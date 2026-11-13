@@ -63,7 +63,7 @@ The published file is written to `publish\win-x64\LastLogon.exe`. [docs/publishi
 - `LastLogon.Core/`: the scanning and filtering logic, with no user interface.
 - `ScanWindow.xaml` and `ScanWindow.xaml.cs`: the WPF window. `AdDialog.xaml` is the Active Directory search, and `Styles.xaml` holds the look the two share.
 - `LastLogon.Tests/`: the unit tests.
-- `docs/`: the design specs, the publishing guide, and the [QA review](docs/qa/2026-11-12-qa-audit.md) with its open findings.
+- `docs/`: the publishing guide and the sample screenshot.
 
 ## Behaviour and limits
 

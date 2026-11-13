@@ -29,3 +29,7 @@ coverage*.info
 Thumbs.db
 Desktop.ini
 .DS_Store
+
+## Working documents that are not published: QA reports, design specs and plans
+docs/qa/
+docs/superpowers/
