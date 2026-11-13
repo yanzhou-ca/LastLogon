@@ -236,6 +236,46 @@ public class LogonEventScannerTests
         Assert.Equal(LogonQueryStatus.Offline, CompletionFor(updates, "pc01").Status);
     }
 
+    // The window shows this in a narrow column, so it is a short phrase and not an enum member name.
+    [Theory]
+    [InlineData(LogonQueryStatus.Success, "OK")]
+    [InlineData(LogonQueryStatus.AccessDenied, "Access denied")]
+    [InlineData(LogonQueryStatus.Offline, "Offline")]
+    [InlineData(LogonQueryStatus.TimedOut, "Timed out")]
+    [InlineData(LogonQueryStatus.Cancelled, "Cancelled")]
+    [InlineData(LogonQueryStatus.Error, "Error")]
+    public void ComputerCompleted_StatusText_SaysWhatHappenedInWords(LogonQueryStatus status, string expected)
+        => Assert.Equal(expected, new LogonComputerCompleted("pc01", status, null, 0).StatusText);
+
+    // A bare "Access denied." leaves the operator guessing which permission is missing.
+    [Fact]
+    public async Task ScanAsync_AccessDeniedSaysWhichPermissionIsMissing()
+    {
+        var source = new DelegateSource((_, _) => Throw(new UnauthorizedAccessException()));
+        var scanner = new LogonEventScanner(source);
+
+        var updates = await CollectAsync(scanner, new[] { "pc01" });
+
+        var message = CompletionFor(updates, "pc01").Message;
+        Assert.Contains("Security log", message);
+        Assert.Contains("permission", message);
+    }
+
+    // "Unreachable" is usually a firewall rule and not a computer that is off, and the rule has a name.
+    [Fact]
+    public async Task ScanAsync_AnUnreachableHostNamesTheFirewallRuleThatIsUsuallyMissing()
+    {
+        var source = new DelegateSource((_, _) => throw new EventLogException("The RPC server is unavailable.")
+        {
+            HResult = unchecked((int)0x800706BA)
+        });
+        var scanner = new LogonEventScanner(source);
+
+        var updates = await CollectAsync(scanner, new[] { "pc01" });
+
+        Assert.Contains("Remote Event Log Management", CompletionFor(updates, "pc01").Message);
+    }
+
     private static readonly string EventXml = """
         <Event xmlns="http://schemas.microsoft.com/win/2004/08/events/event">
           <System>

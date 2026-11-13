@@ -23,7 +23,19 @@ public sealed record LogonComputerCompleted(
     LogonQueryStatus Status,
     string? Message,
     int EventCount,
-    bool Truncated = false) : LogonScanUpdate;
+    bool Truncated = false) : LogonScanUpdate
+{
+    /// <summary>What happened to this computer, in words that fit a narrow column.</summary>
+    public string StatusText => Status switch
+    {
+        LogonQueryStatus.Success => "OK",
+        LogonQueryStatus.AccessDenied => "Access denied",
+        LogonQueryStatus.Offline => "Offline",
+        LogonQueryStatus.TimedOut => "Timed out",
+        LogonQueryStatus.Cancelled => "Cancelled",
+        _ => "Error",
+    };
+}
 
 public interface ILogonEventScanner
 {
@@ -267,11 +279,16 @@ public sealed class LogonEventScanner : ILogonEventScanner
         bool cancelled)
         => exception switch
         {
-            UnauthorizedAccessException => (LogonQueryStatus.AccessDenied, "Access denied."),
+            UnauthorizedAccessException => (
+                LogonQueryStatus.AccessDenied,
+                "Access denied. The account has no permission to read the Security log on this computer. "
+                + "It has to be an administrator there or a member of Event Log Readers."),
             OperationCanceledException when cancelled => (LogonQueryStatus.Cancelled, "Scan cancelled."),
             OperationCanceledException when timedOut => (LogonQueryStatus.TimedOut, "The query timed out."),
             EventLogException ex when (uint)ex.HResult == RpcServerUnavailable =>
-                (LogonQueryStatus.Offline, "The computer is unreachable."),
+                (LogonQueryStatus.Offline,
+                    "The computer is unreachable. Check that it is on and that the Remote Event Log "
+                    + "Management firewall rules are enabled on it."),
             EventLogException ex => (LogonQueryStatus.Error, ex.Message),
             DirectoryNotFoundException => (LogonQueryStatus.Offline, "Computer or Security log was not found."),
             IOException => (LogonQueryStatus.Offline, exception.Message),

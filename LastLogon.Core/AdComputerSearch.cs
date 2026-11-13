@@ -69,20 +69,55 @@ public static class AdComputerSearch
             throw new ArgumentException(
                 defaultNamingContext.Length > 0
                     ? $"Enter a distinguished name inside {defaultNamingContext}, for example OU=Sales."
-                    : "Enter a distinguished name such as OU=Sales.",
+                    : FormAdvice,
                 nameof(ouDistinguishedName));
 
         return dn;
     }
 
+    /// <summary>
+    /// Checks the form of an OU distinguished name without asking the directory, so that a typing
+    /// mistake can be shown as soon as it is made. Returns null when the name is well formed, or
+    /// empty (the field is optional), and otherwise a sentence that says what to enter. Whether
+    /// the name lies inside this computer's own domain only the directory can say; the search
+    /// checks that.
+    /// </summary>
+    public static string? DescribeDistinguishedNameProblem(string? distinguishedName)
+        => string.IsNullOrWhiteSpace(distinguishedName) || TryParseForm(distinguishedName.Trim(), out _)
+            ? null
+            : FormAdvice;
+
+    private const string FormAdvice = "Enter a distinguished name such as OU=Sales.";
+
     internal static bool IsValidDistinguishedName(string dn, string defaultNamingContext)
     {
+        if (!TryParseForm(dn, out var rdns)) return false;
+
+        // The domain components have to match this computer's own domain, otherwise the bind
+        // would be redirected to another directory.
+        var requested = DomainComponents(rdns);
+        if (requested.Count == 0) return true;                              // relative to the default context
+
+        var local = DomainComponents(SplitRelativeNames(defaultNamingContext));
+        if (local.Count == 0) return false;
+
+        return requested.Count == local.Count
+            && requested.Zip(local).All(pair => pair.First.Equals(pair.Second, StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// The part of the check that needs no directory: the name has no server component, no control
+    /// characters and a type and a value in every relative name.
+    /// </summary>
+    private static bool TryParseForm(string dn, out List<string> rdns)
+    {
+        rdns = new List<string>();
         if (string.IsNullOrWhiteSpace(dn) || dn.Length > 1024) return false;
         if (dn.Any(char.IsControl)) return false;
         if (dn.Contains('/')) return false;                                  // server component
         if (dn.StartsWith("LDAP://", StringComparison.OrdinalIgnoreCase)) return false;
 
-        var rdns = SplitRelativeNames(dn);
+        rdns = SplitRelativeNames(dn);
         if (rdns.Count == 0) return false;
 
         foreach (var rdn in rdns)
@@ -96,16 +131,7 @@ public static class AdComputerSearch
             if (!IsValidAttributeType(type)) return false;
         }
 
-        // The domain components have to match this computer's own domain, otherwise the bind
-        // would be redirected to another directory.
-        var requested = DomainComponents(rdns);
-        if (requested.Count == 0) return true;                              // relative to the default context
-
-        var local = DomainComponents(SplitRelativeNames(defaultNamingContext));
-        if (local.Count == 0) return false;
-
-        return requested.Count == local.Count
-            && requested.Zip(local).All(pair => pair.First.Equals(pair.Second, StringComparison.OrdinalIgnoreCase));
+        return true;
     }
 
     private static string GetDefaultNamingContext(DirectoryEntry root)

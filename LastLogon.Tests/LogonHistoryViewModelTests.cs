@@ -32,7 +32,10 @@ public class LogonHistoryViewModelTests
         await emptyViewModel.ScanAsync();
 
         Assert.Equal(0, emptyScanner.CallCount);
-        Assert.Equal("Computer name: Enter at least one computer name.", emptyViewModel.StatusText);
+        Assert.Equal(
+            new ValidationIssue(ValidationField.Computers, "Enter at least one computer name."),
+            emptyViewModel.Validation);
+        Assert.Equal("Ready", emptyViewModel.StatusText);
 
         var reversedScanner = new FakeScanner((_, _, _, _) => Updates());
         var reversedViewModel = new LogonHistoryViewModel(reversedScanner)
@@ -45,7 +48,9 @@ public class LogonHistoryViewModelTests
         await reversedViewModel.ScanAsync();
 
         Assert.Equal(0, reversedScanner.CallCount);
-        Assert.Equal("Start time must be earlier than end time.", reversedViewModel.StatusText);
+        Assert.Equal(
+            new ValidationIssue(ValidationField.TimeRange, "Start time must be earlier than end time."),
+            reversedViewModel.Validation);
     }
 
     [Fact]
@@ -209,7 +214,8 @@ public class LogonHistoryViewModelTests
         await viewModel.ScanAsync();
 
         Assert.Equal(0, scanner.CallCount);
-        Assert.Contains("must not exceed", viewModel.StatusText);
+        Assert.Equal(ValidationField.TimeRange, viewModel.Validation?.Field);
+        Assert.Contains("must not exceed", viewModel.Validation!.Message);
     }
 
     [Fact]
@@ -344,6 +350,93 @@ public class LogonHistoryViewModelTests
 
         Assert.Equal(new[] { "scan2", "late2" }, viewModel.Events.Select(e => e.AccountName));
         Assert.Single(viewModel.ComputerStatuses);
+    }
+
+    [Fact]
+    public async Task ScanAsync_NamesTheEntryThatIsNotAComputerName()
+    {
+        var scanner = new FakeScanner((_, _, _, _) => Updates());
+        var viewModel = new LogonHistoryViewModel(scanner) { ComputersText = "pc01 pc_02" };
+
+        await viewModel.ScanAsync();
+
+        Assert.Equal(0, scanner.CallCount);
+        Assert.Equal(ValidationField.Computers, viewModel.Validation?.Field);
+        Assert.Contains("pc_02", viewModel.Validation!.Message);
+    }
+
+    [Fact]
+    public async Task ClearValidation_RemovesTheIssue()
+    {
+        var viewModel = new LogonHistoryViewModel(new FakeScanner((_, _, _, _) => Updates())) { ComputersText = "" };
+        await viewModel.ScanAsync();
+        Assert.NotNull(viewModel.Validation);
+
+        viewModel.ClearValidation();
+
+        Assert.Null(viewModel.Validation);
+    }
+
+    [Fact]
+    public async Task ScanAsync_WithValidInput_ClearsAnEarlierIssue()
+    {
+        var viewModel = new LogonHistoryViewModel(ScannerWithEvents()) { ComputersText = "" };
+        await viewModel.ScanAsync();
+        Assert.NotNull(viewModel.Validation);
+
+        viewModel.ComputersText = "pc01";
+        await viewModel.ScanAsync();
+
+        Assert.Null(viewModel.Validation);
+    }
+
+    // The status line says how far a long query has got, so that waiting on a long list of
+    // computers can be told apart from a hang.
+    [Fact]
+    public async Task ScanAsync_ReportsHowManyComputersHaveFinished()
+    {
+        var eventRecord = Record("pc01", "alice", "CORP", 2, new DateTimeOffset(2025, 3, 4, 5, 0, 0, TimeSpan.Zero));
+        var scanner = new FakeScanner((_, _, _, _) => Updates(
+            new LogonEventFound(eventRecord),
+            new LogonComputerCompleted("pc01", LogonQueryStatus.Success, null, 1),
+            new LogonComputerCompleted("pc02", LogonQueryStatus.AccessDenied, "Access denied.", 0)));
+        var viewModel = new LogonHistoryViewModel(scanner) { ComputersText = "pc01 pc02" };
+        var statuses = new List<string>();
+        viewModel.PropertyChanged += (_, args) =>
+        {
+            if (args.PropertyName == nameof(LogonHistoryViewModel.StatusText)) statuses.Add(viewModel.StatusText);
+        };
+
+        await viewModel.ScanAsync();
+
+        Assert.Contains("Scanning… 0 of 2 computers", statuses);
+        Assert.Contains("Scanning… 1 of 2 computers", statuses);
+        Assert.Contains("Scanning… 2 of 2 computers", statuses);
+        Assert.Equal(2, viewModel.ScanTotal);
+        Assert.Equal(2, viewModel.ScanCompleted);
+    }
+
+    [Fact]
+    public async Task ScanAsync_CountsEventsInTheSingular()
+    {
+        var one = Record("pc01", "alice", "CORP", 2, new DateTimeOffset(2025, 3, 4, 5, 0, 0, TimeSpan.Zero));
+        var viewModel = new LogonHistoryViewModel(ScannerWithEvents(one)) { ComputersText = "pc01" };
+
+        await viewModel.ScanAsync();
+
+        Assert.Equal("Done. 1 event; 1 succeeded, 0 failed.", viewModel.StatusText);
+    }
+
+    [Fact]
+    public async Task ScanAsync_CountsEventsInThePlural()
+    {
+        var first = Record("pc01", "alice", "CORP", 2, new DateTimeOffset(2025, 3, 4, 5, 0, 0, TimeSpan.Zero));
+        var second = Record("pc01", "bob", "CORP", 2, new DateTimeOffset(2025, 3, 4, 5, 1, 0, TimeSpan.Zero));
+        var viewModel = new LogonHistoryViewModel(ScannerWithEvents(first, second)) { ComputersText = "pc01" };
+
+        await viewModel.ScanAsync();
+
+        Assert.Equal("Done. 2 events; 1 succeeded, 0 failed.", viewModel.StatusText);
     }
 
     private static FakeScanner ScannerWithEvents(params LogonEventRecord[] events)

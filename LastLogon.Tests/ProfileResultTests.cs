@@ -27,4 +27,47 @@ public class ProfileResultTests
     [Fact]
     public void CanOpenFolder_IsFalseForARowThatNamesNoProfile()
         => Assert.False(Row("", ScanStatus.Offline).CanOpenFolder);
+
+    // The grid shows these texts to an operator, so they must not be the names of enum members.
+    [Theory]
+    [InlineData(ActivitySource.NtUserDat, "NTUSER.DAT")]
+    [InlineData(ActivitySource.Folder, "Folder time")]
+    public void SourceText_NamesTheSourceTheWayAnOperatorReadsIt(ActivitySource source, string expected)
+        => Assert.Equal(expected, new ProfileResult("pc1", "alice", null, source, ScanStatus.Ok, null).SourceText);
+
+    [Fact]
+    public void SourceText_IsEmptyWhenTheRowHasNoSource()
+        => Assert.Equal("", Row("alice", ScanStatus.Offline).SourceText);
+
+    [Theory]
+    [InlineData(ScanStatus.NoProfile, "No profile")]
+    [InlineData(ScanStatus.AccessDenied, "Access denied")]
+    [InlineData(ScanStatus.Offline, "Offline")]
+    [InlineData(ScanStatus.TimedOut, "Timed out")]
+    [InlineData(ScanStatus.Error, "Error")]
+    public void ResultText_SaysWhatHappenedInWords(ScanStatus status, string expected)
+        => Assert.Equal(expected, Row("alice", status).ResultText);
+
+    [Fact]
+    public void ResultText_IsOkWhenTheTimeCameFromNtUserDat()
+        => Assert.Equal(
+            "OK",
+            new ProfileResult("pc1", "alice", new DateTime(2025, 1, 1), ActivitySource.NtUserDat, ScanStatus.Ok, null).ResultText);
+
+    // A folder time is only an approximation of the activity, so the row must not read as a plain OK.
+    [Fact]
+    public void ResultText_IsApproximateWhenOnlyTheFolderTimeIsKnown()
+        => Assert.Equal(
+            "Approximate",
+            new ProfileResult("pc1", "alice", new DateTime(2025, 1, 1), ActivitySource.Folder, ScanStatus.Ok, "NTUSER.DAT not found; using folder time").ResultText);
+
+    [Fact]
+    public void DetailText_IsTheMessageOfTheRow()
+        => Assert.Equal(
+            "Offline or C$ unreachable",
+            new ProfileResult("pc1", "alice", null, null, ScanStatus.Offline, "Offline or C$ unreachable").DetailText);
+
+    [Fact]
+    public void DetailText_IsEmptyWhenThereIsNoMessage()
+        => Assert.Equal("", Row("alice", ScanStatus.Ok).DetailText);
 }

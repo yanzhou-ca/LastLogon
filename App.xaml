@@ -2,5 +2,43 @@
              xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
              xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
              StartupUri="ScanWindow.xaml">
-    <Application.Resources />
+    <Application.Resources>
+        <ResourceDictionary>
+            <ResourceDictionary.MergedDictionaries>
+                <ResourceDictionary Source="Styles.xaml" />
+            </ResourceDictionary.MergedDictionaries>
+
+            <!--
+              The colours the windows pick for themselves. They are resources so that App.xaml.cs
+              can swap them for system colours when Windows is in a High Contrast theme, where a
+              fixed grey or red can end up unreadable on the theme's background. The values here
+              are the only place the colours are written down.
+            -->
+            <SolidColorBrush x:Key="CaptionBrush" Color="#666666" />
+            <SolidColorBrush x:Key="ErrorBrush" Color="#A4262C" />
+            <SolidColorBrush x:Key="SubtleBorderBrush" Color="#DDDDDD" />
+            <SolidColorBrush x:Key="PanelBrush" Color="#FAFAFA" />
+            <SolidColorBrush x:Key="StaleBrush" Color="#3CFFA000" />
+
+            <!-- The border of a field in its three states. They are the colours of the stock text box, so a dropdown, a button's neighbour and a table match it. -->
+            <SolidColorBrush x:Key="FieldBorderBrush" Color="#ABADB3" />
+            <SolidColorBrush x:Key="FieldHoverBorderBrush" Color="#7EB4EA" />
+            <SolidColorBrush x:Key="FieldFocusBorderBrush" Color="#569DE5" />
+
+            <!-- The flat button, in the colours of the Windows button; its outline is the outline of the fields. -->
+            <SolidColorBrush x:Key="ButtonBrush" Color="#E1E1E1" />
+            <SolidColorBrush x:Key="ButtonBorderBrush" Color="#ABADB3" />
+            <SolidColorBrush x:Key="ButtonHoverBrush" Color="#E5F1FB" />
+            <SolidColorBrush x:Key="ButtonHoverBorderBrush" Color="#0078D7" />
+            <SolidColorBrush x:Key="ButtonPressedBrush" Color="#CCE4F7" />
+            <SolidColorBrush x:Key="ButtonPressedBorderBrush" Color="#005499" />
+
+            <!-- Rows, list items and column headings under the pointer or selected, with the colour of the text that goes on them. -->
+            <SolidColorBrush x:Key="RowHoverBrush" Color="#E5F3FF" />
+            <SolidColorBrush x:Key="RowSelectedBrush" Color="#CCE8FF" />
+            <SolidColorBrush x:Key="RowSelectedBorderBrush" Color="#99D1FF" />
+            <SolidColorBrush x:Key="RowSelectedInactiveBrush" Color="#DADADA" />
+            <SolidColorBrush x:Key="RowHighlightTextBrush" Color="#000000" />
+        </ResourceDictionary>
+    </Application.Resources>
 </Application>

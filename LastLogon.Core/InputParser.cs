@@ -12,7 +12,8 @@ public static class InputParser
             if (name.Length == 0) continue;
             if (!IsValidComputerName(name))
                 throw new FormatException(
-                    "Computer names must be host names, short or fully qualified, without path syntax.");
+                    $"\"{Shorten(name)}\" is not a valid computer name. Use a short name (PC-0142) or a full name "
+                    + "(pc-0142.corp.local): letters, digits and hyphens only.");
             if (seen.Add(name)) list.Add(name);
         }
         return list;
@@ -70,6 +71,34 @@ public static class InputParser
 
     private static bool IsAsciiLetterOrDigit(char c)
         => c is >= 'A' and <= 'Z' or >= 'a' and <= 'z' or >= '0' and <= '9';
+
+    /// <summary>The longest stale threshold the window accepts: ten years.</summary>
+    public const int MaxStaleDays = 3650;
+
+    /// <summary>
+    /// Reads the "stale after" box: a whole number of days from 1 to <see cref="MaxStaleDays"/>.
+    /// Anything else is refused instead of being guessed at, so the box never shows a number that
+    /// the table is not using.
+    /// </summary>
+    public static bool TryParseStaleDays(string? text, out int days)
+    {
+        days = 0;
+        var trimmed = text?.Trim();
+        if (string.IsNullOrEmpty(trimmed) || trimmed.Length > 4) return false;
+        foreach (var character in trimmed)
+        {
+            if (character is < '0' or > '9') return false;
+        }
+
+        var value = int.Parse(trimmed, System.Globalization.CultureInfo.InvariantCulture);
+        if (value is < 1 or > MaxStaleDays) return false;
+
+        days = value;
+        return true;
+    }
+
+    private static string Shorten(string text, int maxLength = 40)
+        => text.Length <= maxLength ? text : text[..(maxLength - 1)] + "…";
 
     public static string NormalizeUsername(string input)
     {

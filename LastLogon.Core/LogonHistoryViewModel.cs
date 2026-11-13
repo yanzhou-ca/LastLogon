@@ -39,6 +39,9 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
     private bool _isScanning;
     private string _statusText = "Ready";
     private bool _isTruncated;
+    private ValidationIssue? _validation;
+    private int _scanTotal;
+    private int _scanCompleted;
 
     public LogonHistoryViewModel(
         ILogonEventScanner scanner,
@@ -146,6 +149,20 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
         private set => Set(ref _statusText, value);
     }
 
+    /// <summary>
+    /// The input problem that stopped the last scan from starting, or null. It belongs next to the
+    /// field it names; it is deliberately not part of <see cref="StatusText"/>.
+    /// </summary>
+    public ValidationIssue? Validation { get => _validation; private set => Set(ref _validation, value); }
+
+    /// <summary>How many computers the running (or last) query was asked to look at.</summary>
+    public int ScanTotal { get => _scanTotal; private set => Set(ref _scanTotal, value); }
+
+    /// <summary>How many of those computers have reported, with events or with a reason.</summary>
+    public int ScanCompleted { get => _scanCompleted; private set => Set(ref _scanCompleted, value); }
+
+    public void ClearValidation() => Validation = null;
+
     public void Cancel() => TryCancel(_cancellation);
 
     private static void TryCancel(CancellationTokenSource? source)
@@ -167,30 +184,34 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
         {
             computers = InputParser.ParseComputers(ComputersText);
         }
-        catch (FormatException)
+        catch (FormatException ex)
         {
             ClearResults();
-            StatusText = "Computer name: Enter a short computer name; paths and domains are not allowed.";
+            Validation = new ValidationIssue(ValidationField.Computers, ex.Message);
             return;
         }
 
         if (computers.Count == 0)
         {
-            StatusText = "Computer name: Enter at least one computer name.";
+            Validation = new ValidationIssue(ValidationField.Computers, "Enter at least one computer name.");
             return;
         }
 
         if (StartLocal >= EndLocal)
         {
-            StatusText = "Start time must be earlier than end time.";
+            Validation = new ValidationIssue(ValidationField.TimeRange, "Start time must be earlier than end time.");
             return;
         }
 
         if (EndLocal - StartLocal > _maxRange)
         {
-            StatusText = $"The time range must not exceed {_maxRange.TotalDays:F0} days.";
+            Validation = new ValidationIssue(
+                ValidationField.TimeRange,
+                $"The time range must not exceed {_maxRange.TotalDays:F0} days.");
             return;
         }
+
+        Validation = null;
 
         // A scan that is still running is replaced. It is cancelled first, so that it cannot go
         // on adding events to the list that is cleared for the new scan and so that Cancel
@@ -202,8 +223,10 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
         var cancellation = new CancellationTokenSource();
         _cancellation = cancellation;
         var cancellationToken = cancellation.Token;
+        ScanTotal = computers.Count;
+        ScanCompleted = 0;
         IsScanning = true;
-        StatusText = "Scanning…";
+        StatusText = Progress(0, computers.Count);
 
         var fromUtc = StartLocal.ToUniversalTime();
         var toUtc = EndLocal.ToUniversalTime();
@@ -237,7 +260,12 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
                         break;
                     case LogonComputerCompleted completed:
                         if (completed.Truncated) _isTruncated = true;
-                        Post(() => ComputerStatuses.Add(completed));
+                        Post(() =>
+                        {
+                            ComputerStatuses.Add(completed);
+                            ScanCompleted = ComputerStatuses.Count;
+                            StatusText = Progress(ScanCompleted, computers.Count);
+                        });
                         break;
                 }
             }
@@ -247,16 +275,16 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
                 var successful = ComputerStatuses.Count(item => item.Status == LogonQueryStatus.Success);
                 var failed = ComputerStatuses.Count - successful;
                 StatusText = _isTruncated
-                    ? $"Stopped at the {_maxEvents} event limit. {Events.Count} event(s) collected; results are incomplete."
+                    ? $"Stopped at the {_maxEvents} event limit. {Plural.Count(Events.Count, "event")} collected; results are incomplete."
                     : cancellationToken.IsCancellationRequested
-                        ? $"Cancelled. {Events.Count} event(s); {failed} incomplete computer(s)."
-                        : $"Done. {Events.Count} event(s); {successful} succeeded, {failed} failed.";
+                        ? $"Cancelled. {Plural.Count(Events.Count, "event")}; {Plural.Count(failed, "incomplete computer")}."
+                        : $"Done. {Plural.Count(Events.Count, "event")}; {successful} succeeded, {failed} failed.";
             }
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             if (generation == _scanGeneration)
-                StatusText = $"Cancelled. {Events.Count} event(s); {ComputerStatuses.Count} computer(s) completed.";
+                StatusText = $"Cancelled. {Plural.Count(Events.Count, "event")}; {Plural.Count(ComputerStatuses.Count, "computer")} completed.";
         }
         catch (Exception ex)
         {
@@ -276,6 +304,9 @@ public sealed class LogonHistoryViewModel : INotifyPropertyChanged
             cancellation.Dispose();
         }
     }
+
+    private static string Progress(int completed, int total)
+        => $"Scanning… {completed} of {Plural.Count(total, "computer")}";
 
     private void ClearResults()
     {

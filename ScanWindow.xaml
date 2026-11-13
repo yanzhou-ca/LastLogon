@@ -2,125 +2,162 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:LastLogon"
-        Title="Last Profile Activity"
-        Width="940" Height="620" MinWidth="900" MinHeight="480"
+        Title="LastLogon" Icon="Assets/LastLogon.ico"
+        Width="940" Height="760" MinWidth="900" MinHeight="480"
         WindowStartupLocation="CenterScreen"
         FontFamily="Segoe UI" FontSize="13"
         TextOptions.TextFormattingMode="Display"
         UseLayoutRounding="True">
 
     <Window.Resources>
-        <Style TargetType="Button">
-            <Setter Property="Padding" Value="14,6" />
-            <Setter Property="MinWidth" Value="80" />
-        </Style>
-        <Style x:Key="PrimaryButton" TargetType="Button" BasedOn="{StaticResource {x:Type Button}}">
-            <Setter Property="Background" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
-            <Setter Property="Foreground" Value="{DynamicResource {x:Static SystemColors.HighlightTextBrushKey}}" />
-            <Setter Property="BorderBrush" Value="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}" />
-            <Setter Property="Padding" Value="18,6" />
-            <Setter Property="MinWidth" Value="88" />
-            <Setter Property="FontWeight" Value="SemiBold" />
-        </Style>
-        <Style x:Key="Caption" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#666" />
-            <Setter Property="FontSize" Value="12" />
-        </Style>
-        <Style x:Key="FieldLabel" TargetType="TextBlock">
-            <Setter Property="FontWeight" Value="SemiBold" />
-            <Setter Property="Margin" Value="0,0,0,4" />
-        </Style>
-        <Style x:Key="ValidationMessage" TargetType="TextBlock">
-            <Setter Property="Foreground" Value="#A4262C" />
-            <Setter Property="FontSize" Value="12" />
-            <Setter Property="Margin" Value="0,4,0,0" />
-            <Setter Property="TextWrapping" Value="Wrap" />
-        </Style>
+        <BooleanToVisibilityConverter x:Key="BoolToVisibility" />
         <local:LocalTimeTextConverter x:Key="LocalTimeTextConverter" />
+
+        <!-- The row tint comes from the Stale mark, which the code sets when a row appears and when the threshold changes. -->
+        <Style x:Key="ResultItem" TargetType="ListViewItem" BasedOn="{StaticResource {x:Type ListViewItem}}">
+            <EventSetter Event="Loaded" Handler="Item_Loaded" />
+            <Style.Triggers>
+                <Trigger Property="local:Stale.IsStale" Value="True">
+                    <Setter Property="Background" Value="{DynamicResource StaleBrush}" />
+                </Trigger>
+            </Style.Triggers>
+        </Style>
     </Window.Resources>
 
-    <Grid Margin="24,16,24,16">
+    <Grid x:Name="RootGrid" Margin="20">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
-            <RowDefinition Height="*" />
+            <RowDefinition Height="*" MinHeight="160" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
-        <StackPanel Grid.Row="0" Margin="0,0,0,16">
-            <TextBlock Text="Lookup" Style="{StaticResource FieldLabel}" />
-            <StackPanel Orientation="Horizontal">
-                <RadioButton x:Name="ByComputerRadio" Content="By computer: who used this PC"
-                             IsChecked="True" Margin="0,0,24,0" Checked="Mode_Changed" />
-                <RadioButton x:Name="ByUserRadio" Content="By user: which PCs did this user use"
-                             Margin="0,0,24,0" Checked="Mode_Changed" />
-                <RadioButton x:Name="LogonHistoryRadio" Content="Logon history"
-                             Checked="Mode_Changed" />
-            </StackPanel>
-        </StackPanel>
+        <!-- Row 0: which lookup, and the scan buttons. They live here so that they stay where they are in every lookup. -->
+        <Grid Grid.Row="0" Margin="0,0,0,16">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
 
-        <StackPanel Grid.Row="1" Margin="0,0,0,16">
-            <StackPanel x:Name="UsernamePanel" Visibility="Collapsed" Margin="0,0,0,8">
-                <TextBlock Text="Username (jdoe, CORP\jdoe or jdoe@corp.local)" Style="{StaticResource FieldLabel}" />
-                <TextBox x:Name="UsernameBox" Padding="6,4" AutomationProperties.Name="Username"
-                         TextChanged="ValidationInput_TextChanged" PreviewKeyDown="LookupInput_PreviewKeyDown" />
-                <TextBlock x:Name="UsernameErrorLabel" Style="{StaticResource ValidationMessage}"
-                           Visibility="Collapsed" />
+            <GroupBox Header="Lookup" BorderThickness="0">
+                <StackPanel Orientation="Horizontal" KeyboardNavigation.TabIndex="0"
+                            KeyboardNavigation.TabNavigation="Once" KeyboardNavigation.DirectionalNavigation="Cycle">
+                    <RadioButton x:Name="ByComputerRadio" IsChecked="True" Margin="0,0,24,0" Checked="Mode_Changed"
+                                 AutomationProperties.Name="By computer: who used this computer">
+                        <TextBlock>
+                            <Run Text="By computer" /><Run Text=": who used this computer" Foreground="{DynamicResource CaptionBrush}" />
+                        </TextBlock>
+                    </RadioButton>
+                    <RadioButton x:Name="ByUserRadio" Margin="0,0,24,0" Checked="Mode_Changed"
+                                 AutomationProperties.Name="By user: which computers did this user use">
+                        <TextBlock>
+                            <Run Text="By user" /><Run Text=": which computers did this user use" Foreground="{DynamicResource CaptionBrush}" />
+                        </TextBlock>
+                    </RadioButton>
+                    <RadioButton x:Name="LogonHistoryRadio" Content="Logon history" Checked="Mode_Changed" />
+                </StackPanel>
+            </GroupBox>
+
+            <StackPanel Grid.Column="1" Orientation="Horizontal" VerticalAlignment="Bottom">
+                <Button x:Name="ScanButton" Content="Scan" IsDefault="True" Click="Scan_Click"
+                        KeyboardNavigation.TabIndex="30"
+                        Margin="0,0,8,0" Style="{StaticResource PrimaryButton}" />
+                <Button x:Name="CancelButton" Content="Cancel" IsCancel="True" IsEnabled="False" Click="Cancel_Click"
+                        KeyboardNavigation.TabIndex="31" />
             </StackPanel>
-            <Grid>
+        </Grid>
+
+        <!-- Row 1: the inputs of the chosen lookup. -->
+        <StackPanel Grid.Row="1" Margin="0,0,0,16">
+            <StackPanel x:Name="UsernamePanel" Visibility="Collapsed" Margin="0,0,0,12">
+                <Grid>
+                    <TextBlock Text="Username (jdoe, CORP\jdoe or jdoe@corp.local)" Style="{StaticResource FieldLabel}" />
+                    <TextBlock x:Name="UsernameErrorLabel" Style="{StaticResource ValidationMessage}"
+                               HorizontalAlignment="Right" Margin="0,0,0,4" Visibility="Hidden"
+                               AutomationProperties.LiveSetting="Assertive" />
+                </Grid>
+                <TextBox x:Name="UsernameBox" AutomationProperties.Name="Username" KeyboardNavigation.TabIndex="10"
+                         TextChanged="ValidationInput_TextChanged" PreviewKeyDown="LookupInput_PreviewKeyDown" />
+            </StackPanel>
+
+            <TextBlock x:Name="ComputersLabel" Text="Computer name (short name or FQDN)" Style="{StaticResource FieldLabel}" />
+            <TextBox x:Name="ComputersBox" AcceptsReturn="True" TextWrapping="Wrap"
+                     MaxHeight="112" VerticalScrollBarVisibility="Auto"
+                     KeyboardNavigation.TabIndex="11"
+                     AutomationProperties.Name="Computer names" TextChanged="ValidationInput_TextChanged"
+                     PreviewKeyDown="LookupInput_PreviewKeyDown" />
+
+            <!-- One line under the field: the hint, or the error in its place. The line is always there, so nothing moves when an error appears. -->
+            <Grid Margin="0,4,0,0">
+                <TextBlock x:Name="ComputerTargetLabel" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                <TextBlock x:Name="ComputersErrorLabel" Style="{StaticResource ValidationMessage}"
+                           Visibility="Hidden" AutomationProperties.LiveSetting="Assertive" />
+            </Grid>
+
+            <!-- Fill the box from a file or from Active Directory. Where a list of computers is typed: By user and Logon history. -->
+            <StackPanel x:Name="ListButtons" Orientation="Horizontal" Visibility="Collapsed" Margin="0,8,0,0">
+                <Button x:Name="LoadFileButton" Content="Load from file…" Click="Import_Click" Margin="0,0,8,0"
+                        KeyboardNavigation.TabIndex="12"
+                        ToolTip="Put the names in a text or CSV file in the box. They replace what is there; Ctrl+Z in the box brings it back." />
+                <Button x:Name="LoadAdButton" Content="Load from AD…" Click="FromAd_Click"
+                        KeyboardNavigation.TabIndex="13"
+                        ToolTip="Put the names of computers in Active Directory in the box. They replace what is there; Ctrl+Z in the box brings it back." />
+            </StackPanel>
+
+            <!--
+              How the scan connects, on one line: the account it runs as, and how a computer name
+              is turned into an address. The dropdown is an advanced option, so it stands under the
+              field with its own caption, away from the edge of the box it used to touch. It is
+              reached after the inputs in the Tab order.
+            -->
+            <Grid Margin="0,8,0,0">
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
-                <TextBlock x:Name="ComputersLabel" Text="Computer name (short name or FQDN)" Style="{StaticResource FieldLabel}" />
-                <ComboBox x:Name="AddressingCombo" Grid.Column="1" Width="185" SelectedIndex="0"
+                <TextBlock x:Name="RunContextLabel" Style="{StaticResource Caption}"
+                           TextWrapping="Wrap" VerticalAlignment="Center" />
+                <TextBlock x:Name="AddressingCaption" Grid.Column="1" Text="Address as" Style="{StaticResource Caption}"
+                           Margin="16,0,8,0" VerticalAlignment="Center" />
+                <ComboBox x:Name="AddressingCombo" Grid.Column="2" Width="184" SelectedIndex="0" KeyboardNavigation.TabIndex="14"
                           SelectionChanged="AddressingCombo_SelectionChanged"
-                          AutomationProperties.Name="How the computer is addressed"
+                          AutomationProperties.Name="Address as"
+                          AutomationProperties.LabeledBy="{Binding ElementName=AddressingCaption}"
                           ToolTip="Domain-qualified completes the name with your domain and cannot be redirected by a name answer on the network. Short name uses the name the way Windows resolves it, which some estates need when the DNS name of a computer differs from its short name.">
                     <ComboBoxItem Content="Domain-qualified name" />
                     <ComboBoxItem Content="Short name" />
                 </ComboBox>
             </Grid>
-            <TextBox x:Name="ComputersBox" AcceptsReturn="True" TextWrapping="Wrap" Padding="6,4"
-                     MinHeight="30" MaxHeight="110" VerticalScrollBarVisibility="Auto"
-                     AutomationProperties.Name="Computer names" TextChanged="ValidationInput_TextChanged"
-                     PreviewKeyDown="LookupInput_PreviewKeyDown" />
-            <TextBlock x:Name="ComputerTargetLabel" Style="{StaticResource Caption}"
-                       Margin="0,2,0,0" TextWrapping="Wrap" />
-            <TextBlock x:Name="RunContextLabel" Style="{StaticResource Caption}"
-                       Margin="0,2,0,0" TextWrapping="Wrap" />
-            <TextBlock x:Name="ComputersErrorLabel" Style="{StaticResource ValidationMessage}"
-                       Visibility="Collapsed" />
-            <StackPanel x:Name="ListButtons" Orientation="Horizontal" Visibility="Collapsed" Margin="0,8,0,0">
-                <Button Content="Import .txt…" Click="Import_Click" Margin="0,0,8,0" />
-                <Button Content="From AD…" Click="FromAd_Click" />
-            </StackPanel>
-            <StackPanel x:Name="HistoryPanel" Visibility="Collapsed" Margin="0,10,0,0">
+            <TextBlock x:Name="ProfileNote" Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
+                       Text="Last profile activity is when NTUSER.DAT was last written, normally at logoff. Someone who is still logged on shows their previous logoff." />
+
+            <StackPanel x:Name="HistoryPanel" Visibility="Collapsed" Margin="0,12,0,0">
                 <Grid>
                     <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="170" />
-                        <ColumnDefinition Width="170" />
+                        <ColumnDefinition Width="168" />
+                        <ColumnDefinition Width="168" />
                         <ColumnDefinition Width="*" />
                         <ColumnDefinition Width="*" />
                     </Grid.ColumnDefinitions>
                     <StackPanel Margin="0,0,12,0">
                         <TextBlock Text="From (local time)" Style="{StaticResource FieldLabel}" />
-                        <TextBox x:Name="HistoryStartBox" Padding="6,4"
+                        <TextBox x:Name="HistoryStartBox" KeyboardNavigation.TabIndex="20"
                                  TextChanged="ValidationInput_TextChanged"
                                  PreviewKeyDown="LookupInput_PreviewKeyDown"
                                  AutomationProperties.Name="History start local date and time" />
                     </StackPanel>
                     <StackPanel Grid.Column="1" Margin="0,0,12,0">
                         <TextBlock Text="To (local time)" Style="{StaticResource FieldLabel}" />
-                        <TextBox x:Name="HistoryEndBox" Padding="6,4"
+                        <TextBox x:Name="HistoryEndBox" KeyboardNavigation.TabIndex="21"
                                  TextChanged="ValidationInput_TextChanged"
                                  PreviewKeyDown="LookupInput_PreviewKeyDown"
                                  AutomationProperties.Name="History end local date and time" />
                     </StackPanel>
                     <StackPanel Grid.Column="2" Margin="0,0,12,0">
                         <TextBlock Text="Account" Style="{StaticResource FieldLabel}" />
-                        <ComboBox x:Name="AccountFilterCombo" SelectedIndex="0"
+                        <ComboBox x:Name="AccountFilterCombo" SelectedIndex="0" KeyboardNavigation.TabIndex="22"
                                   SelectionChanged="HistoryFilter_Changed"
                                   AutomationProperties.Name="Account filter">
                             <ComboBoxItem Content="All accounts" />
@@ -130,7 +167,7 @@
                     </StackPanel>
                     <StackPanel Grid.Column="3">
                         <TextBlock Text="Logon type" Style="{StaticResource FieldLabel}" />
-                        <ComboBox x:Name="TypeFilterCombo" SelectedIndex="0"
+                        <ComboBox x:Name="TypeFilterCombo" SelectedIndex="0" KeyboardNavigation.TabIndex="23"
                                   SelectionChanged="HistoryFilter_Changed"
                                   AutomationProperties.Name="Logon type filter">
                             <ComboBoxItem Content="All types" />
@@ -141,86 +178,137 @@
                         </ComboBox>
                     </StackPanel>
                 </Grid>
-                <TextBlock x:Name="HistoryTimeErrorLabel" Style="{StaticResource ValidationMessage}"
-                           Visibility="Collapsed" />
-                <TextBlock Text="Security-log results depend on permissions, audit policy, and retention. Missing events do not prove there was no logon."
-                           Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
+                <!-- The note under the time boxes gives way to the time error and comes back with it. -->
+                <Grid Margin="0,8,0,0">
+                    <TextBlock x:Name="HistoryCaption"
+                               Text="Security-log results depend on permissions, audit policy, and retention. Missing events do not prove there was no logon."
+                               Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                    <TextBlock x:Name="HistoryTimeErrorLabel" Style="{StaticResource ValidationMessage}"
+                               Visibility="Hidden" AutomationProperties.LiveSetting="Assertive" />
+                </Grid>
             </StackPanel>
         </StackPanel>
 
+        <!-- Row 2: what applies to the results. -->
         <Grid Grid.Row="2" Margin="0,0,0,16">
             <Grid.ColumnDefinitions>
-                <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="Auto" />
                 <ColumnDefinition Width="*" />
                 <ColumnDefinition Width="Auto" />
             </Grid.ColumnDefinitions>
 
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Bottom">
-                <Button x:Name="ScanButton" Content="Scan" IsDefault="True" Click="Scan_Click"
-                        Margin="0,0,8,0" Style="{StaticResource PrimaryButton}" />
-                <Button x:Name="CancelButton" Content="Cancel" IsEnabled="False" Click="Cancel_Click" />
-                <ProgressBar x:Name="Progress" IsIndeterminate="True" Width="80" Height="4"
-                             Margin="12,0,0,0" VerticalAlignment="Center" Visibility="Collapsed" />
-            </StackPanel>
-
-            <StackPanel x:Name="StaleSettingsPanel" Grid.Column="1" Margin="24,0,0,0">
-                <TextBlock Text="Stale after (days)" Style="{StaticResource FieldLabel}" />
-                <TextBox x:Name="StaleBox" Text="90" Width="80" Padding="6,4"
+            <StackPanel x:Name="StaleSettingsPanel">
+                <TextBlock Text="Mark stale after (days)" Style="{StaticResource FieldLabel}" />
+                <TextBox x:Name="StaleBox" Text="90" Width="80" MaxLength="4" KeyboardNavigation.TabIndex="40"
                          HorizontalAlignment="Left" TextChanged="StaleBox_TextChanged"
-                         AutomationProperties.Name="Stale after days" />
+                         LostFocus="StaleBox_LostFocus" PreviewTextInput="StaleBox_PreviewTextInput"
+                         AutomationProperties.Name="Mark stale after days"
+                         ToolTip="Rows whose last profile activity is older than this many days are marked stale." />
             </StackPanel>
 
-            <StackPanel Grid.Column="3" Orientation="Horizontal" VerticalAlignment="Bottom">
-                <Button Content="Copy" Click="Copy_Click" Margin="0,0,8,0"
-                        ToolTip="Copy selected rows (or all)" />
-                <Button Content="Export CSV" Click="Export_Click" Margin="0,0,8,0"
-                        ToolTip="Export results to CSV" />
-                <Button x:Name="OpenFolderButton" Content="Open folder" IsEnabled="False"
-                        Click="OpenFolder_Click" ToolTip="Open selected profile folder" />
+            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
+                <Button x:Name="CopyButton" Content="Copy" Click="Copy_Click" KeyboardNavigation.TabIndex="41"
+                        ToolTip="Copy the selected rows, or all rows when none is selected" />
+                <Button x:Name="ExportButton" Content="Export CSV" Click="Export_Click" Margin="8,0,0,0" KeyboardNavigation.TabIndex="42"
+                        ToolTip="Export all rows to a CSV file" />
+                <Button x:Name="OpenFolderButton" Content="Open folder" IsEnabled="False" Margin="8,0,0,0" KeyboardNavigation.TabIndex="43"
+                        Click="OpenFolder_Click" ToolTip="Open the selected profile folder" />
             </StackPanel>
         </Grid>
 
+        <!-- Row 3: the profile table, with the full text of the selected row under it. -->
         <Grid x:Name="ResultsHost" Grid.Row="3">
-            <ListView x:Name="ResultsList" SelectionMode="Extended" SelectionChanged="ResultsList_SelectionChanged"
-                      AutomationProperties.Name="Profile scan results"
-                      BorderBrush="#DDD" BorderThickness="1">
-                <ListView.ItemContainerStyle>
-                    <Style TargetType="ListViewItem">
-                        <EventSetter Event="Loaded" Handler="Item_Loaded" />
-                        <Setter Property="Padding" Value="4,3" />
-                    </Style>
-                </ListView.ItemContainerStyle>
-                <ListView.View>
-                    <GridView>
-                        <GridViewColumn Header="Computer" Width="132" DisplayMemberBinding="{Binding Computer}" />
-                        <GridViewColumn Header="Username" Width="132" DisplayMemberBinding="{Binding Username}" />
-                        <GridViewColumn Header="Last profile activity" Width="145" DisplayMemberBinding="{Binding LastActivityText}" />
-                        <GridViewColumn Header="Days ago" Width="72" DisplayMemberBinding="{Binding DaysAgoText}" />
-                        <GridViewColumn Header="Source" Width="80" DisplayMemberBinding="{Binding SourceText}" />
-                        <GridViewColumn Header="Status" Width="250">
-                            <GridViewColumn.CellTemplate>
-                                <DataTemplate>
-                                    <TextBlock Text="{Binding StatusText}" TextTrimming="CharacterEllipsis"
-                                               ToolTip="{Binding StatusText}" />
-                                </DataTemplate>
-                            </GridViewColumn.CellTemplate>
-                        </GridViewColumn>
-                    </GridView>
-                </ListView.View>
-            </ListView>
-            <Border x:Name="EmptyResultsPanel" BorderBrush="#DDD" BorderThickness="1"
-                    Background="#FAFAFA" IsHitTestVisible="False">
-                <TextBlock x:Name="EmptyResultsLabel" Text="Run a scan to see profile activity."
-                           Foreground="#666" TextAlignment="Center" TextWrapping="Wrap"
-                           HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
+            <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+            </Grid.RowDefinitions>
+            <Grid>
+                <ListView x:Name="ResultsList" SelectionMode="Extended" SelectionChanged="ResultsList_SelectionChanged"
+                          MouseDoubleClick="ResultsList_MouseDoubleClick"
+                          AutomationProperties.Name="Profile scan results"
+                          ItemContainerStyle="{StaticResource ResultItem}"
+                          local:FillColumn.IsEnabled="True" local:FillColumn.MinWidth="120"
+                          local:Sorting.IsEnabled="True">
+                    <ListView.ContextMenu>
+                        <ContextMenu Opened="ResultsMenu_Opened">
+                            <MenuItem x:Name="MenuCopyRows" Header="_Copy rows" InputGestureText="Ctrl+C" Click="MenuCopyRows_Click" />
+                            <MenuItem x:Name="MenuCopyComputer" Header="Copy computer _name" Click="MenuCopyComputer_Click" />
+                            <Separator />
+                            <MenuItem x:Name="MenuOpenFolder" Header="_Open profile folder" Click="MenuOpenFolder_Click" />
+                        </ContextMenu>
+                    </ListView.ContextMenu>
+                    <ListView.View>
+                        <GridView>
+                            <GridViewColumn Header="Computer" Width="104" local:Sorting.SortBy="Computer">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Computer}" Style="{StaticResource TrimmedCell}"
+                                                   ToolTip="{Binding Computer}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="Username" Width="116" local:Sorting.SortBy="Username">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding Username}" Style="{StaticResource TrimmedCell}"
+                                                   ToolTip="{Binding Username}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="Last profile activity" Width="156" DisplayMemberBinding="{Binding LastActivityText}"
+                                            local:Sorting.SortBy="LastActivity" />
+                            <GridViewColumn Header="Days ago" Width="84" local:Sorting.SortBy="DaysAgo"
+                                            HeaderContainerStyle="{StaticResource NumericGridHeader}">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DaysAgoText}" HorizontalAlignment="Right" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="Stale" Width="60">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="Yes"
+                                                   Visibility="{Binding RelativeSource={RelativeSource AncestorType=ListViewItem}, Path=(local:Stale.IsStale), Converter={StaticResource BoolToVisibility}}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                            <GridViewColumn Header="Source" Width="88" DisplayMemberBinding="{Binding SourceText}"
+                                            local:Sorting.SortBy="SourceText" />
+                            <GridViewColumn Header="Result" Width="104" DisplayMemberBinding="{Binding ResultText}"
+                                            local:Sorting.SortBy="ResultText" />
+                            <GridViewColumn Header="Details" Width="200">
+                                <GridViewColumn.CellTemplate>
+                                    <DataTemplate>
+                                        <TextBlock Text="{Binding DetailText}" TextTrimming="CharacterEllipsis"
+                                                   ToolTip="{Binding Message}" />
+                                    </DataTemplate>
+                                </GridViewColumn.CellTemplate>
+                            </GridViewColumn>
+                        </GridView>
+                    </ListView.View>
+                </ListView>
+                <Border x:Name="EmptyResultsPanel" BorderBrush="{DynamicResource FieldBorderBrush}" BorderThickness="1"
+                        Background="{DynamicResource PanelBrush}" IsHitTestVisible="False">
+                    <TextBlock x:Name="EmptyResultsLabel" Text="Run a scan to see profile activity."
+                               Foreground="{DynamicResource CaptionBrush}" TextAlignment="Center" TextWrapping="Wrap"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
+                </Border>
+            </Grid>
+            <Border x:Name="ResultDetailsPane" Grid.Row="1" Margin="0,8,0,0" Padding="8" Visibility="Collapsed"
+                    BorderBrush="{DynamicResource FieldBorderBrush}" BorderThickness="1"
+                    Background="{DynamicResource PanelBrush}">
+                <TextBox x:Name="ResultDetailsBox" IsReadOnly="True" TextWrapping="Wrap" BorderThickness="0"
+                         Background="Transparent" MinHeight="0" Padding="0" MaxHeight="124" VerticalScrollBarVisibility="Auto"
+                         AutomationProperties.Name="Full text of the selected result" />
             </Border>
         </Grid>
 
+        <!-- Row 3 in Logon history: the events, and below them the selected event and the state of each computer. -->
         <Grid x:Name="HistoryResultsHost" Grid.Row="3" Visibility="Collapsed">
             <Grid.RowDefinitions>
-                <RowDefinition Height="3*" MinHeight="180" />
-                <RowDefinition Height="2*" MinHeight="130" />
+                <RowDefinition Height="3*" MinHeight="120" />
+                <RowDefinition Height="2*" MinHeight="96" />
             </Grid.RowDefinitions>
             <Grid Grid.Row="0">
                 <DataGrid x:Name="HistoryEventsGrid" AutoGenerateColumns="False" IsReadOnly="True"
@@ -228,56 +316,122 @@
                           ItemsSource="{Binding FilteredEvents}"
                           SelectedItem="{Binding SelectedEvent, Mode=TwoWay}"
                           AutomationProperties.Name="Logon history events"
-                          CanUserSortColumns="True" HeadersVisibility="Column"
-                          BorderBrush="#DDD" BorderThickness="1">
+                          ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                          CanUserSortColumns="True">
                     <DataGrid.Columns>
-                        <DataGridTextColumn Header="Computer" Width="105" Binding="{Binding Computer}" />
-                        <DataGridTextColumn Header="Time (local)" Width="145"
+                        <DataGridTextColumn Header="Computer" Width="0.9*" MinWidth="76" ElementStyle="{StaticResource TrimmedCell}"
+                                            Binding="{Binding Computer}" />
+                        <DataGridTextColumn Header="Time (local)" Width="1.5*" MinWidth="128" ElementStyle="{StaticResource TrimmedCell}"
                                             Binding="{Binding TimeUtc, Converter={StaticResource LocalTimeTextConverter}}" />
-                        <DataGridTextColumn Header="Event ID" Width="75" Binding="{Binding EventId}" />
-                        <DataGridTextColumn Header="Event" Width="175" Binding="{Binding EventName}" />
-                        <DataGridTextColumn Header="Account" Width="130" Binding="{Binding AccountName}" />
-                        <DataGridTextColumn Header="Domain" Width="130" Binding="{Binding AccountDomain}" />
-                        <DataGridTextColumn Header="Logon type" Width="130" Binding="{Binding LogonTypeName}" />
-                        <DataGridTextColumn Header="Source address" Width="125" Binding="{Binding SourceAddress}" />
+                        <DataGridTextColumn Header="Event ID" Width="0.85*" MinWidth="76" ElementStyle="{StaticResource NumericCell}"
+                                            HeaderStyle="{StaticResource NumericDataGridHeader}"
+                                            Binding="{Binding EventId}" />
+                        <DataGridTextColumn Header="Event" Width="1.6*" MinWidth="128" ElementStyle="{StaticResource TrimmedCell}"
+                                            Binding="{Binding EventName}" />
+                        <DataGridTextColumn Header="Account" Width="1.05*" MinWidth="84" ElementStyle="{StaticResource TrimmedCell}"
+                                            Binding="{Binding AccountName}" />
+                        <DataGridTextColumn Header="Domain" Width="1.2*" MinWidth="84" ElementStyle="{StaticResource TrimmedCell}"
+                                            Binding="{Binding AccountDomain}" />
+                        <DataGridTextColumn Header="Logon type" Width="1.45*" MinWidth="112" ElementStyle="{StaticResource TrimmedCell}"
+                                            Binding="{Binding LogonTypeName}" />
+                        <DataGridTextColumn Header="Source address" Width="1.15*" MinWidth="96" ElementStyle="{StaticResource TrimmedCell}"
+                                            Binding="{Binding SourceAddress}" />
                     </DataGrid.Columns>
                 </DataGrid>
-                <Border x:Name="HistoryEmptyPanel" BorderBrush="#DDD" BorderThickness="1"
-                        Background="#FAFAFA" IsHitTestVisible="False">
+                <Border x:Name="HistoryEmptyPanel" BorderBrush="{DynamicResource FieldBorderBrush}" BorderThickness="1"
+                        Background="{DynamicResource PanelBrush}" IsHitTestVisible="False">
                     <TextBlock x:Name="HistoryEmptyLabel" Text="Run a history scan to see Security-log events."
-                               Foreground="#666" TextAlignment="Center" TextWrapping="Wrap"
+                               Foreground="{DynamicResource CaptionBrush}" TextAlignment="Center" TextWrapping="Wrap"
                                HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
                 </Border>
             </Grid>
             <Grid Grid.Row="1" Margin="0,8,0,0">
                 <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="2*" />
+                    <ColumnDefinition Width="*" />
                     <ColumnDefinition Width="*" />
                 </Grid.ColumnDefinitions>
                 <GroupBox Header="Selected event details" Margin="0,0,8,0">
-                    <ListView ItemsSource="{Binding SelectedDetails}" BorderThickness="0">
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Header="Field" Width="125" DisplayMemberBinding="{Binding Key}" />
-                                <GridViewColumn Header="Value" Width="350" DisplayMemberBinding="{Binding Value}" />
-                            </GridView>
-                        </ListView.View>
-                    </ListView>
+                    <Grid>
+                        <ListView x:Name="SelectedDetailsList" ItemsSource="{Binding SelectedDetails}" BorderThickness="0"
+                                  ItemContainerStyle="{StaticResource TopAlignedItem}"
+                                  AutomationProperties.Name="Selected event details"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  local:FillColumn.IsEnabled="True" local:FillColumn.MinWidth="100">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Field" Width="188" DisplayMemberBinding="{Binding Key}" />
+                                    <GridViewColumn Header="Value" Width="260">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Value}" TextWrapping="Wrap" />
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                        <TextBlock Text="Select an event to see all of its fields.">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyPaneHint}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=SelectedDetailsList}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
                 </GroupBox>
                 <GroupBox Grid.Column="1" Header="Computer status">
-                    <ListView ItemsSource="{Binding ComputerStatuses}" BorderThickness="0">
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Header="Computer" Width="80" DisplayMemberBinding="{Binding Computer}" />
-                                <GridViewColumn Header="Status" Width="75" DisplayMemberBinding="{Binding Status}" />
-                                <GridViewColumn Header="Message" Width="125" DisplayMemberBinding="{Binding Message}" />
-                            </GridView>
-                        </ListView.View>
-                    </ListView>
+                    <Grid>
+                        <ListView x:Name="ComputerStatusList" ItemsSource="{Binding ComputerStatuses}" BorderThickness="0"
+                                  ItemContainerStyle="{StaticResource TopAlignedItem}"
+                                  AutomationProperties.Name="Computer status"
+                                  ScrollViewer.HorizontalScrollBarVisibility="Disabled"
+                                  local:FillColumn.IsEnabled="True" local:FillColumn.MinWidth="100">
+                            <ListView.View>
+                                <GridView>
+                                    <GridViewColumn Header="Computer" Width="84" DisplayMemberBinding="{Binding Computer}" />
+                                    <GridViewColumn Header="Status" Width="100" DisplayMemberBinding="{Binding StatusText}" />
+                                    <GridViewColumn Header="Message" Width="140">
+                                        <GridViewColumn.CellTemplate>
+                                            <DataTemplate>
+                                                <TextBlock Text="{Binding Message}" TextWrapping="Wrap" />
+                                            </DataTemplate>
+                                        </GridViewColumn.CellTemplate>
+                                    </GridViewColumn>
+                                </GridView>
+                            </ListView.View>
+                        </ListView>
+                        <TextBlock Text="The result for each computer appears here after a scan.">
+                            <TextBlock.Style>
+                                <Style TargetType="TextBlock" BasedOn="{StaticResource EmptyPaneHint}">
+                                    <Style.Triggers>
+                                        <DataTrigger Binding="{Binding HasItems, ElementName=ComputerStatusList}" Value="True">
+                                            <Setter Property="Visibility" Value="Collapsed" />
+                                        </DataTrigger>
+                                    </Style.Triggers>
+                                </Style>
+                            </TextBlock.Style>
+                        </TextBlock>
+                    </Grid>
                 </GroupBox>
             </Grid>
         </Grid>
 
-        <TextBlock x:Name="StatusLabel" Grid.Row="4" Margin="0,12,0,0" Style="{StaticResource Caption}" />
+        <!-- Row 4: what happened, and how far a running scan has got. The bar keeps its space when hidden, so the text never moves. -->
+        <Grid Grid.Row="4" Margin="0,16,0,0">
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="*" />
+                <ColumnDefinition Width="Auto" />
+            </Grid.ColumnDefinitions>
+            <TextBlock x:Name="StatusLabel" Style="{StaticResource StatusText}" VerticalAlignment="Center"
+                       AutomationProperties.LiveSetting="Polite" />
+            <ProgressBar x:Name="Progress" Grid.Column="1" Width="180" Height="8" Margin="16,0,0,0"
+                         VerticalAlignment="Center" Visibility="Hidden" Minimum="0" Maximum="1"
+                         Foreground="{DynamicResource {x:Static SystemColors.HighlightBrushKey}}"
+                         AutomationProperties.Name="Scan progress" />
+        </Grid>
     </Grid>
 </Window>

@@ -1,21 +1,33 @@
 <Window x:Class="LastLogon.AdDialog"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="Load computers from Active Directory"
-        Width="460" SizeToContent="Height" ResizeMode="NoResize"
+        Title="Load computers from Active Directory" Icon="Assets/LastLogon.ico"
+        Width="480" SizeToContent="Height" ResizeMode="NoResize"
         WindowStartupLocation="CenterOwner" ShowInTaskbar="False"
-        FontFamily="Segoe UI" FontSize="13">
-    <StackPanel Margin="24">
-        <TextBlock Text="Computer name prefix (blank = all)" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <TextBox x:Name="PrefixBox" Padding="6,4" Margin="0,0,0,12"
+        FocusManager.FocusedElement="{Binding ElementName=PrefixBox}"
+        FontFamily="Segoe UI" FontSize="13"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True">
+    <StackPanel Margin="20">
+        <TextBlock Text="Computer name prefix (blank = all)" Style="{StaticResource FieldLabel}" />
+        <TextBox x:Name="PrefixBox" Margin="0,0,0,12" KeyboardNavigation.TabIndex="0"
                  AutomationProperties.Name="Computer name prefix" />
-        <TextBlock Text="OU distinguished name (optional)" FontWeight="SemiBold" Margin="0,0,0,4" />
-        <TextBox x:Name="OuBox" Padding="6,4" Margin="0,0,0,4"
+
+        <TextBlock Text="OU distinguished name (optional)" Style="{StaticResource FieldLabel}" />
+        <TextBox x:Name="OuBox" KeyboardNavigation.TabIndex="1" TextChanged="OuBox_TextChanged"
                  AutomationProperties.Name="OU distinguished name" />
-        <TextBlock Text="e.g. OU=Workstations,DC=corp,DC=local" Foreground="#666" FontSize="12" />
-        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,20,0,0">
-            <Button Content="Search" IsDefault="True" Padding="14,6" MinWidth="80" Margin="0,0,8,0" Click="Search_Click" />
-            <Button Content="Cancel" IsCancel="True" Padding="14,6" MinWidth="80" />
+
+        <!-- One line under the field: the example, or the error in its place. The line is always there, so nothing moves when an error appears. -->
+        <Grid Margin="0,4,0,0">
+            <TextBlock x:Name="OuHint" Text="e.g. OU=Workstations,DC=corp,DC=local" Style="{StaticResource Caption}" />
+            <TextBlock x:Name="OuErrorLabel" Style="{StaticResource ValidationMessage}" Visibility="Hidden"
+                       AutomationProperties.LiveSetting="Assertive" />
+        </Grid>
+
+        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,16,0,0">
+            <Button Content="Load" IsDefault="True" Click="Load_Click" KeyboardNavigation.TabIndex="2"
+                    Margin="0,0,8,0" Style="{StaticResource PrimaryButton}" />
+            <Button Content="Cancel" IsCancel="True" KeyboardNavigation.TabIndex="3" />
         </StackPanel>
     </StackPanel>
 </Window>

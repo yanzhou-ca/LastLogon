@@ -6,6 +6,7 @@
     <RootNamespace>LastLogon</RootNamespace>
     <Version>1.0.1</Version>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationIcon>Assets\LastLogon.ico</ApplicationIcon>
     <Platforms>x86;x64;ARM64</Platforms>
     <RuntimeIdentifiers>win-x86;win-x64;win-arm64</RuntimeIdentifiers>
     <!--
@@ -43,6 +44,11 @@
       <KnownFrameworkReference Remove="Microsoft.Windows.SDK.NET.Ref" />
     </ItemGroup>
   </Target>
+
+  <!-- The icon of the program: the executable carries it, and the windows show the same file. -->
+  <ItemGroup>
+    <Resource Include="Assets\LastLogon.ico" />
+  </ItemGroup>
 
   <ItemGroup>
     <Content Include="Assets\SplashScreen.scale-200.png" />

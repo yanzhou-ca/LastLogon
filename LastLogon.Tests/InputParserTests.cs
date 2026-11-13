@@ -59,6 +59,52 @@ public class InputParserTests
     [InlineData("a\r\nb")]
     public void IsSafeProfileFolderName_RejectsNamesThatCouldEscapeAPathOrCommandLine(string? name)
         => Assert.False(InputParser.IsSafeProfileFolderName(name));
+
+    // The message is shown next to the field, so it has to say which entry is wrong and what
+    // would be right: a list of fifty names is no help without that.
+    [Fact]
+    public void ParseComputers_NamesTheEntryThatIsNotAComputerName()
+    {
+        var error = Assert.Throws<FormatException>(() => InputParser.ParseComputers("pc01 pc_02 pc03"));
+
+        Assert.Contains("pc_02", error.Message);
+        Assert.Contains("letters, digits and hyphens", error.Message);
+    }
+
+    [Fact]
+    public void ParseComputers_ShortensAVeryLongEntryInTheMessage()
+    {
+        var entry = new string('a', 300) + "_";
+
+        var error = Assert.Throws<FormatException>(() => InputParser.ParseComputers(entry));
+
+        Assert.True(error.Message.Length < 250, "the whole entry was copied into the message");
+        Assert.Contains("…", error.Message);
+    }
+
+    [Theory]
+    [InlineData("90", 90)]
+    [InlineData("1", 1)]
+    [InlineData(" 30 ", 30)]
+    [InlineData("3650", 3650)]
+    public void TryParseStaleDays_AcceptsAWholeNumberOfDays(string text, int expected)
+    {
+        Assert.True(InputParser.TryParseStaleDays(text, out var days));
+        Assert.Equal(expected, days);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("0")]
+    [InlineData("-5")]
+    [InlineData("abc")]
+    [InlineData("1.5")]
+    [InlineData("9 0")]
+    [InlineData("3651")]
+    [InlineData("99999999999")]
+    public void TryParseStaleDays_RejectsAnythingElse(string? text)
+        => Assert.False(InputParser.TryParseStaleDays(text, out _));
 }
 
 public class ComputerTargetTests
