@@ -93,6 +93,21 @@ public class SmbProfileFileSystemTests
         });
     }
 
+    // Review focus 3: a folder name from a remote listing reaches the two new file calls
+    [Theory]
+    [InlineData("..\\..\\Windows")]
+    [InlineData("a/b")]
+    [InlineData("")]
+    public void NewFileCalls_RefuseAFolderNameThatCouldEscapeTheShare(string folder)
+    {
+        WithDnsDomain("corp.example", () =>
+        {
+            var fs = new SmbProfileFileSystem();
+            Assert.Throws<ArgumentException>(() => fs.GetFolderAccessSids("pc01", folder));
+            Assert.Throws<ArgumentException>(() => fs.GetProfileUse("pc01", folder));
+        });
+    }
+
     private static string InvokeRoot(string computer)
     {
         var method = typeof(SmbProfileFileSystem).GetMethod("Root", BindingFlags.NonPublic | BindingFlags.Static)!;

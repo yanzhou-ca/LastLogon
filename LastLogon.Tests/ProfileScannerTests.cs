@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using LastLogon.Core;
 using Xunit;
 
@@ -32,6 +33,34 @@ public class FakeFs : IProfileFileSystem
         return NtUser.TryGetValue($"{c}|{u}", out var t) ? t : null;
     }
     public DateTime GetFolderTime(string c, string u) => new(2020, 1, 1);
+
+    // Access lists and the in-use check, keyed "computer|folder". A missing key answers an empty list and Unknown.
+    public Dictionary<string, string[]> Acl = new(StringComparer.OrdinalIgnoreCase);
+    public Dictionary<string, ProfileUse> Use = new(StringComparer.OrdinalIgnoreCase);
+    public Func<string, string, Exception?>? FailAcl;
+    public TimeSpan AclDelay = TimeSpan.Zero;
+    public ConcurrentQueue<string> UseChecks = new();
+    private int _aclCur, _aclPeak;
+    public int AclPeak => _aclPeak;
+
+    public IReadOnlyList<string> GetFolderAccessSids(string c, string u)
+    {
+        var cur = Interlocked.Increment(ref _aclCur);
+        int p; while (cur > (p = _aclPeak)) Interlocked.CompareExchange(ref _aclPeak, cur, p);
+        try
+        {
+            if (AclDelay > TimeSpan.Zero) Thread.Sleep(AclDelay);
+            var ex = FailAcl?.Invoke(c, u); if (ex != null) throw ex;
+            return Acl.TryGetValue($"{c}|{u}", out var l) ? l : Array.Empty<string>();
+        }
+        finally { Interlocked.Decrement(ref _aclCur); }
+    }
+
+    public ProfileUse GetProfileUse(string c, string u)
+    {
+        UseChecks.Enqueue($"{c}|{u}");
+        return Use.TryGetValue($"{c}|{u}", out var v) ? v : ProfileUse.Unknown;
+    }
 }
 
 public class ProfileScannerTests
