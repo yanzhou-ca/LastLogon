@@ -30,7 +30,7 @@ Working with the results:
 
 ## Read the results with care
 
-- **Last login** and **Logged in now** come from the login and logout records in each computer's System and User Profile Service event logs. Windows writes them without an audit policy, and keeps them only as far back as the logs go: `Before 2026-05-12` means no login since the logs begin on that date, and `Yes, over 185 days` means a user who has been logged in since before they begin. Whether a user is logged in is settled by whether Windows holds the profile open.
+- **Last login** and **Logged in now** come from the login and logout records in each computer's System and User Profile Service event logs. Windows writes them without an audit policy, and keeps them only as far back as the logs go: `Before 2026-05-12` means no login since the logs begin on that date, and `Yes, over 185 days` means a user who has been logged in since before they begin. Whether a user is logged in is settled by whether Windows holds the profile open. A service or scheduled task that runs as a user holds the profile open too, so a service account can show as logged in.
 - A row marked **Approximate** rests on the time of the profile file (`NTUSER.DAT`, which Windows writes at logoff) because the login records could not be used. Its Details say why: the logs could not be read, hold no login or logout record at all, or could not be matched to the profile folder. For someone who is still logged on, that time is the previous logoff, not the current time.
 - **A missing record is not proof** that a user never used a computer. Profiles get cleaned up, folders can carry a domain suffix, and event logs are overwritten.
 
