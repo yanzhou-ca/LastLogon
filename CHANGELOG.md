@@ -2,7 +2,9 @@
 
 All notable changes to LastLogon are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [2.0.0] - 2026-11-16
+
+This is a new major version because the tables of By computer and By user have different columns: **Last profile activity** is now **Last logout**, the Source column is gone, and Last login and Logged in now are new. The CSV export keeps its seven columns in their old order and adds five after them.
 
 ### Added
 
