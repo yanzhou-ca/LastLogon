@@ -50,9 +50,57 @@ public class ProfileScanner
         IEnumerable<string> computers, CancellationToken ct)
         => ScanOnComputersAsync<ProfileResult>(computers, ScanComputerWithOutcomeAsync, ct);
 
-    public IAsyncEnumerable<ProfileResult> FindUserAsync(
-        string username, IEnumerable<string> computers, CancellationToken ct)
-        => ScanOnComputersAsync<ProfileResult>(computers, (computer, token) => CheckUserAsync(computer, username, token), ct);
+    /// <summary>
+    /// The computers from the list, each with its row for the user: the profile that was found, none, or why the computer
+    /// could not be checked. <paramref name="typedName"/> is what the operator typed (CORP\jdoe, jdoe@corp.local, jdoe):
+    /// the account it names is looked up once for the whole scan. Null means <paramref name="username"/>.
+    /// </summary>
+    public async IAsyncEnumerable<ProfileResult> FindUserAsync(
+        string username,
+        IEnumerable<string> computers,
+        [EnumeratorCancellation] CancellationToken ct,
+        string? typedName = null)
+    {
+        string? sid = null;
+        try
+        {
+            sid = await ResolveSidAsync(typedName ?? username, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+        }
+
+        if (ct.IsCancellationRequested) yield break;
+
+        await foreach (var result in ScanOnComputersAsync<ProfileResult>(
+                           computers, (computer, token) => CheckUserAsync(computer, username, sid, token), ct))
+        {
+            yield return result;
+        }
+    }
+
+    /// <summary>
+    /// The SID of the account the operator typed, or null when it cannot be found, so that By user falls back to what the
+    /// access list of the folder says. Only a scan that reads login records needs it.
+    /// </summary>
+    private async Task<string?> ResolveSidAsync(string name, CancellationToken ct)
+    {
+        if (_loginHistory is null || _resolveUserSid is null) return null;
+
+        try
+        {
+            var text = await _resolveUserSid(name, ct).WaitAsync(_timeout, ct);
+            return SidText.TryNormalize(text, out var sid) ? sid : null;
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
 
     /// <summary>
     /// The outcome of scanning one computer, together with any work that is still running in the
@@ -195,7 +243,8 @@ public class ProfileScanner
         }
     }
 
-    private async Task<ScanOutcome<ProfileResult>> CheckUserAsync(string computer, string username, CancellationToken ct)
+    private async Task<ScanOutcome<ProfileResult>> CheckUserAsync(
+        string computer, string username, string? sid, CancellationToken ct)
     {
         Task? pending = null;
         try
@@ -241,13 +290,80 @@ public class ProfileScanner
                 }
             }, ct, task => pending = task);
 
-            return new ScanOutcome<ProfileResult>(new[] { result }, null);
+            var (row, pendingLogin) = await AddLoginForUserAsync(computer, result, sid, ct);
+            return new ScanOutcome<ProfileResult>(new[] { row }, pendingLogin);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         catch (Exception ex)
         {
             var tried = await TryTheNamesAsync(ex, computer, ct);
             return new ScanOutcome<ProfileResult>(new[] { Failure(computer, username, ex, tried) }, pending);
+        }
+    }
+
+    /// <summary>
+    /// What the login records say about the profile that By user found. The folder is matched to the account through its
+    /// access list, and only that account's records are read. A row for a computer without the profile, or one that
+    /// failed, is returned as it is. Like By computer, a step that fails only makes the row fall back.
+    /// </summary>
+    private async Task<(ProfileResult Row, Task? Pending)> AddLoginForUserAsync(
+        string computer, ProfileResult row, string? sid, CancellationToken ct)
+    {
+        if (_loginHistory is null || row.Status != ScanStatus.Ok)
+        {
+            return (row, null);
+        }
+
+        var abandoned = new List<Task>();
+        try
+        {
+            var lists = await ReadAccessListsAsync(computer, new[] { row.Username }, ct, abandoned);
+            var folder = new ProfileFolder(row.Username, row.LastActivity, row.Source ?? ActivitySource.Folder, lists[row.Username]);
+
+            var user = ProfileFolderMatcher.MatchForUser(folder.Candidates, sid);
+            var match = user.Match;
+            LoginHistory history;
+            if (user.NeedsRecords)
+            {
+                // Several accounts are on the list and the name did not say which: the records of everyone decide.
+                history = await ReadHistoryAsync(computer, null, ct, abandoned);
+                match = ProfileFolderMatcher.ChooseByRecords(user.Ambiguous, history);
+            }
+            else if (match.IsMatch)
+            {
+                history = await ReadHistoryAsync(computer, match.Sid, ct, abandoned);
+            }
+            else
+            {
+                history = LoginHistory.Unavailable("The records were not read.");
+            }
+
+            var info = await AssessFolderAsync(computer, match, folder, history, ct, abandoned);
+            return (ApplyLogin(row, info), PendingOf(abandoned));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            return (row, PendingOf(abandoned));
+        }
+    }
+
+    private async Task<LoginInfo> AssessFolderAsync(
+        string computer, FolderMatch match, ProfileFolder folder, LoginHistory history, CancellationToken ct, List<Task> abandoned)
+    {
+        try
+        {
+            return await RunWithTimeout(
+                () => LoginAssessor.Assess(match, folder, history, () => UseOf(computer, folder.Name)),
+                ct,
+                abandoned.Add);
+        }
+        catch (TimeoutException)
+        {
+            return LoginAssessor.Assess(match, folder, history, () => ProfileUse.Unknown);
         }
     }
 

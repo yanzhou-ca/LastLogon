@@ -271,6 +271,205 @@ public class ProfileScannerLoginTests
         Assert.Equal(1, fs.AclPeak);
     }
 
+    // ---- By user
+
+    private static FakeFs PcsWithJdoe(params string[] computers)
+    {
+        var fs = new FakeFs();
+        foreach (var computer in computers)
+        {
+            fs.Folders[computer] = new() { "jdoe" };
+            fs.NtUser[$"{computer}|jdoe"] = At("2026-10-14T20:46:08Z");
+            fs.Acl[$"{computer}|jdoe"] = Builtin.Append(Jdoe).ToArray();
+        }
+
+        return fs;
+    }
+
+    private static ProfileScanner UserScanner(
+        FakeFs fs, FakeHistory? history, Func<string, CancellationToken, Task<string?>>? resolver)
+        => new(fs, 4, loginHistory: history, resolveUserSid: resolver);
+
+    private static Func<string, CancellationToken, Task<string?>> Resolves(string? sid)
+        => (_, _) => Task.FromResult(sid);
+
+    private static async Task<List<ProfileResult>> Find(
+        ProfileScanner scanner, string[] computers, string? typedName = null, string username = "jdoe")
+    {
+        var rows = new List<ProfileResult>();
+        await foreach (var row in scanner.FindUserAsync(username, computers, default, typedName))
+        {
+            rows.Add(row);
+        }
+
+        return rows;
+    }
+
+    [Fact]
+    public async Task FindUser_FillsTheLoginFactsOfTheUsersFolder()
+    {
+        var fs = PcsWithJdoe("pc1");
+        fs.Use["pc1|jdoe"] = ProfileUse.InUse;
+        var history = HistoryOf(
+            TestHistory.Login(Asmith, "2026-11-12T08:00:00Z"),
+            TestHistory.Logout(Jdoe, "2026-10-14T20:46:08Z"), TestHistory.Login(Jdoe, "2026-10-15T16:25:45Z"));
+
+        var row = Assert.Single(await Find(UserScanner(fs, history, Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal(new[] { ("pc1", (string?)Jdoe) }, history.Reads.ToArray());
+        Assert.Equal(LoggedInState.Yes, row.Login!.LoggedIn);
+        Assert.Equal(TestHistory.T("2026-10-15T16:25:45Z"), row.Login.LoggedInSince);
+        Assert.Equal(ActivitySource.LoginRecords, row.Source);
+        Assert.Equal("OK", row.ResultText);
+    }
+
+    [Fact]
+    public async Task FindUser_ResolvesTheNameOncePerScan()
+    {
+        var fs = PcsWithJdoe("pc1", "pc2", "pc3");
+        var asked = new ConcurrentQueue<string>();
+        Func<string, CancellationToken, Task<string?>> resolver = (name, _) =>
+        {
+            asked.Enqueue(name);
+            return Task.FromResult<string?>(Jdoe);
+        };
+
+        var rows = await Find(UserScanner(fs, HistoryOf(), resolver), new[] { "pc1", "pc2", "pc3" }, typedName: @"CORP\jdoe");
+
+        Assert.Equal(3, rows.Count);
+        Assert.Equal(new[] { @"CORP\jdoe" }, asked.ToArray());
+    }
+
+    [Fact]
+    public async Task FindUser_AsksTheResolverForTheUsernameWhenNoTypedNameIsGiven()
+    {
+        var asked = new ConcurrentQueue<string>();
+        Func<string, CancellationToken, Task<string?>> resolver = (name, _) =>
+        {
+            asked.Enqueue(name);
+            return Task.FromResult<string?>(null);
+        };
+
+        await Find(UserScanner(PcsWithJdoe("pc1"), HistoryOf(), resolver), new[] { "pc1" });
+
+        Assert.Equal(new[] { "jdoe" }, asked.ToArray());
+    }
+
+    [Fact]
+    public async Task FindUser_WhenTheFolderDoesNotListTheResolvedSid_RowFallsBack()
+    {
+        var fs = PcsWithJdoe("pc1");
+        fs.Acl["pc1|jdoe"] = Builtin.Append(Asmith).ToArray();
+        var history = HistoryOf(TestHistory.Login(Jdoe, "2026-10-15T16:25:45Z"));
+
+        var row = Assert.Single(await Find(UserScanner(fs, history, Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal(ScanStatus.Ok, row.Status);
+        Assert.Equal("Approximate", row.ResultText);
+        Assert.Contains(ProfileFolderMatcher.OtherAccountWithTheSameName, row.Message);
+        Assert.Empty(history.Reads);
+    }
+
+    [Fact]
+    public async Task FindUser_WhenTheNameCannotBeResolved_TakesTheOnlyAccount()
+    {
+        var history = HistoryOf(TestHistory.Login(Jdoe, "2026-10-14T08:00:00Z"), TestHistory.Logout(Jdoe, "2026-10-14T20:46:08Z"));
+
+        var row = Assert.Single(await Find(UserScanner(PcsWithJdoe("pc1"), history, Resolves(null)), new[] { "pc1" }));
+
+        Assert.Equal(new[] { ("pc1", (string?)Jdoe) }, history.Reads.ToArray());
+        Assert.True(row.Login!.RecordsUsed);
+        Assert.Equal("OK", row.ResultText);
+    }
+
+    [Fact]
+    public async Task FindUser_WhenTheNameCannotBeResolved_AndSeveralAccountsRemain_ReadsEveryUsersRecords()
+    {
+        var fs = PcsWithJdoe("pc1");
+        fs.Acl["pc1|jdoe"] = Builtin.Append(Jdoe).Append(Asmith).ToArray();
+        var history = HistoryOf(
+            TestHistory.Login(Asmith, "2026-11-12T08:00:00Z"), TestHistory.Logout(Asmith, "2026-11-12T17:00:00Z"));
+
+        var row = Assert.Single(await Find(UserScanner(fs, history, Resolves(null)), new[] { "pc1" }));
+
+        Assert.Equal(new[] { ("pc1", (string?)null) }, history.Reads.ToArray());
+        Assert.True(row.Login!.RecordsUsed);
+        Assert.Equal(TestHistory.T("2026-11-12T08:00:00Z"), row.Login.LastLogin);
+    }
+
+    [Fact]
+    public async Task FindUser_ForAUserWithoutRecords_SaysBeforeTheDateTheRecordsBegin()
+    {
+        var history = HistoryOf(TestHistory.Login(Asmith, "2026-11-12T08:00:00Z"));
+
+        var row = Assert.Single(await Find(UserScanner(PcsWithJdoe("pc1"), history, Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.StartsWith("Before ", row.LastLoginText);
+        Assert.Equal("OK", row.ResultText);
+    }
+
+    [Fact]
+    public async Task FindUser_WhenTheLogsHoldNoRecordAtAll_RestsOnTheProfileFile()
+    {
+        var history = new FakeHistory { Answer = (_, _) => TestHistory.Of(Array.Empty<LoginRecord>(), anyone: false) };
+
+        var row = Assert.Single(await Find(UserScanner(PcsWithJdoe("pc1"), history, Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal("Approximate", row.ResultText);
+        Assert.Contains(LoginAssessor.NoRecordsAtAll, row.Message);
+    }
+
+    [Fact]
+    public async Task FindUser_ResolverTimeoutOrFailure_IsTreatedAsUnresolved()
+    {
+        Func<string, CancellationToken, Task<string?>> failing = (_, _) => throw new InvalidOperationException("no domain controller");
+        var history = HistoryOf(TestHistory.Login(Jdoe, "2026-10-14T08:00:00Z"), TestHistory.Logout(Jdoe, "2026-10-14T20:46:08Z"));
+
+        var row = Assert.Single(await Find(UserScanner(PcsWithJdoe("pc1"), history, failing), new[] { "pc1" }));
+
+        Assert.Equal(ScanStatus.Ok, row.Status);
+        Assert.True(row.Login!.RecordsUsed);
+    }
+
+    [Fact]
+    public async Task FindUser_AResolverThatNeverAnswers_DoesNotHoldUpTheScan()
+    {
+        Func<string, CancellationToken, Task<string?>> never = (_, ct) => Task.Delay(Timeout.Infinite, ct).ContinueWith(_ => (string?)null, CancellationToken.None);
+        var history = HistoryOf(TestHistory.Login(Jdoe, "2026-10-14T08:00:00Z"), TestHistory.Logout(Jdoe, "2026-10-14T20:46:08Z"));
+        var scanner = new ProfileScanner(PcsWithJdoe("pc1"), 4, TimeSpan.FromMilliseconds(200), loginHistory: history, resolveUserSid: never);
+
+        var stopwatch = Stopwatch.StartNew();
+        var row = Assert.Single(await Find(scanner, new[] { "pc1" }));
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3));
+        Assert.Equal(ScanStatus.Ok, row.Status);
+    }
+
+    [Fact]
+    public async Task FindUser_AComputerWithoutTheProfile_StillHasItsNoProfileRow()
+    {
+        var fs = new FakeFs();
+        fs.Folders["pc1"] = new() { "asmith" };
+        var history = HistoryOf();
+
+        var row = Assert.Single(await Find(UserScanner(fs, history, Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal(ScanStatus.NoProfile, row.Status);
+        Assert.Null(row.Login);
+        Assert.Empty(history.Reads);
+    }
+
+    [Fact]
+    public async Task FindUser_WithoutAHistorySource_BehavesAsBefore()
+    {
+        Func<string, CancellationToken, Task<string?>> mustNotBeCalled = (_, _) => throw new InvalidOperationException("resolved");
+
+        var row = Assert.Single(await Find(UserScanner(PcsWithJdoe("pc1"), null, mustNotBeCalled), new[] { "pc1" }));
+
+        Assert.Null(row.Login);
+        Assert.Equal(ActivitySource.NtUserDat, row.Source);
+    }
+
     // Review focus 4: Esc while the records are being read
     [Fact]
     public async Task ScanComputers_CancelledWhileTheRecordsAreRead_EndsPromptlyWithoutRows()
