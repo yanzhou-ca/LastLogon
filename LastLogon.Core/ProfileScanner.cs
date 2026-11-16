@@ -15,14 +15,29 @@ public class ProfileScanner
     private readonly TimeSpan _timeout;
 
     private readonly Func<string, ConnectionTestResult>? _connectionProbe;
+    private readonly ILoginHistorySource? _loginHistory;
+    private readonly Func<string, CancellationToken, Task<string?>>? _resolveUserSid;
+    private readonly TimeSpan _loginHistoryTimeout;
 
+    /// <param name="loginHistory">
+    /// Where the login records of a computer come from. Without it the rows are what they always were: the time of the
+    /// profile file.
+    /// </param>
+    /// <param name="resolveUserSid">Turns the name typed in By user into the SID of the account, or null when it cannot.</param>
+    /// <param name="loginHistoryTimeout">How long the records of one computer may take. Ten seconds, as in Logon history.</param>
     public ProfileScanner(
         IProfileFileSystem fs,
         int maxParallel = 8,
         TimeSpan? perPcTimeout = null,
-        Func<string, ConnectionTestResult>? connectionProbe = null)
+        Func<string, ConnectionTestResult>? connectionProbe = null,
+        ILoginHistorySource? loginHistory = null,
+        Func<string, CancellationToken, Task<string?>>? resolveUserSid = null,
+        TimeSpan? loginHistoryTimeout = null)
     {
         _connectionProbe = connectionProbe;
+        _loginHistory = loginHistory;
+        _resolveUserSid = resolveUserSid;
+        _loginHistoryTimeout = loginHistoryTimeout ?? TimeSpan.FromSeconds(10);
         _fs = fs;
         _maxParallel = maxParallel;
         _timeout = perPcTimeout ?? TimeSpan.FromSeconds(10);
@@ -93,9 +108,10 @@ public class ProfileScanner
                     null);
             }
 
+            var (rows, pendingLogin) = await AddLoginAsync(computer, results, ct);
             return new ScanOutcome<ProfileResult>(
-                results.OrderByDescending(r => r.LastActivity ?? DateTime.MinValue).ToList(),
-                null);
+                rows.OrderBy(r => r, Comparer<ProfileResult>.Create(ProfileResult.CompareForDisplay)).ToList(),
+                pendingLogin);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -304,10 +320,164 @@ public class ProfileScanner
             : new ProfileResult(computer, folder, _fs.GetFolderTime(computer, folder), ActivitySource.Folder, ScanStatus.Ok, "NTUSER.DAT not found; using folder time");
     }
 
-    private async Task<T> RunWithTimeout<T>(Func<T> work, CancellationToken ct, Action<Task>? onTimeout = null)
+    /// <summary>
+    /// What the login records say about the rows of one computer. The records, the access lists and the in-use checks
+    /// are separate steps, each with a time limit of its own, and a step that fails or hangs only makes the rows fall
+    /// back to the time of the profile file. So nothing here can turn a computer whose profiles could be read into a
+    /// failure. Work that cannot be interrupted is returned, so that the caller keeps the slot until it ends.
+    /// </summary>
+    private async Task<(List<ProfileResult> Rows, Task? Pending)> AddLoginAsync(
+        string computer, List<ProfileResult> rows, CancellationToken ct)
+    {
+        var readable = rows.Where(row => row.Status == ScanStatus.Ok).ToList();
+        if (_loginHistory is null || readable.Count == 0)
+        {
+            return (rows, null);
+        }
+
+        var abandoned = new List<Task>();
+        try
+        {
+            var lists = await ReadAccessListsAsync(computer, readable.Select(row => row.Username).ToList(), ct, abandoned);
+            var folders = readable
+                .Select(row => new ProfileFolder(row.Username, row.LastActivity, row.Source ?? ActivitySource.Folder, lists[row.Username]))
+                .ToList();
+            var history = await ReadHistoryAsync(computer, null, ct, abandoned);
+            var infos = await AssessAsync(computer, folders, history, ct, abandoned);
+
+            var result = rows
+                .Select(row => row.Status == ScanStatus.Ok && infos.TryGetValue(row.Username, out var info) ? ApplyLogin(row, info) : row)
+                .ToList();
+            return (result, PendingOf(abandoned));
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // Something unforeseen in the login steps must not cost the rows that were read.
+            return (rows, PendingOf(abandoned));
+        }
+    }
+
+    private static Task? PendingOf(List<Task> abandoned) => abandoned.Count == 0 ? null : Task.WhenAll(abandoned);
+
+    /// <summary>
+    /// The access list of each folder, null for a folder whose list cannot be read. When the step runs out of time every
+    /// list is null and the call that cannot be interrupted is handed to <paramref name="abandoned"/>.
+    /// </summary>
+    private async Task<Dictionary<string, IReadOnlyList<string>?>> ReadAccessListsAsync(
+        string computer, IReadOnlyList<string> folders, CancellationToken ct, List<Task> abandoned)
+    {
+        try
+        {
+            return await RunWithTimeout(() =>
+            {
+                var lists = new Dictionary<string, IReadOnlyList<string>?>(StringComparer.OrdinalIgnoreCase);
+                foreach (var folder in folders)
+                {
+                    try
+                    {
+                        lists[folder] = _fs.GetFolderAccessSids(computer, folder);
+                    }
+                    catch (Exception)
+                    {
+                        lists[folder] = null;
+                    }
+                }
+
+                return lists;
+            }, ct, abandoned.Add);
+        }
+        catch (TimeoutException)
+        {
+            return folders.ToDictionary(folder => folder, _ => (IReadOnlyList<string>?)null, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    /// <summary>
+    /// The login history of a computer, for one user when a SID is given. It never throws except for the cancellation of
+    /// the scan: a read that fails or runs out of time is a history that says it could not be read. The limit is the
+    /// one the reader works to plus a grace, for a source that cannot be interrupted.
+    /// </summary>
+    private async Task<LoginHistory> ReadHistoryAsync(string computer, string? sid, CancellationToken ct, List<Task> abandoned)
+    {
+        var grace = _loginHistoryTimeout < TimeSpan.FromSeconds(5) ? _loginHistoryTimeout : TimeSpan.FromSeconds(5);
+        try
+        {
+            return await RunWithTimeout(
+                () => _loginHistory!.Read(computer, sid, _loginHistoryTimeout, ct),
+                ct,
+                abandoned.Add,
+                _loginHistoryTimeout + grace);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (TimeoutException)
+        {
+            return LoginHistory.Unavailable("Reading the event logs timed out.");
+        }
+        catch (Exception ex)
+        {
+            return LoginHistory.Unavailable("The event logs could not be read: " + ex.Message);
+        }
+    }
+
+    /// <summary>
+    /// What the records say about each folder. The in-use check opens a file on the computer, so it has a limit of its
+    /// own: when it runs out, the rows are assessed again with a check that cannot tell.
+    /// </summary>
+    private async Task<IReadOnlyDictionary<string, LoginInfo>> AssessAsync(
+        string computer, IReadOnlyList<ProfileFolder> folders, LoginHistory history, CancellationToken ct, List<Task> abandoned)
+    {
+        try
+        {
+            return await RunWithTimeout(
+                () => LoginAssessor.AssessComputer(folders, history, folder => UseOf(computer, folder)),
+                ct,
+                abandoned.Add);
+        }
+        catch (TimeoutException)
+        {
+            return LoginAssessor.AssessComputer(folders, history, _ => ProfileUse.Unknown);
+        }
+    }
+
+    private ProfileUse UseOf(string computer, string folder)
+    {
+        try
+        {
+            return _fs.GetProfileUse(computer, folder);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return ProfileUse.Unknown;
+        }
+    }
+
+    /// <summary>
+    /// The row with its login facts. The records are the source of the times unless the row rests on the profile file,
+    /// and what the records say is added to the message the row already had.
+    /// </summary>
+    private static ProfileResult ApplyLogin(ProfileResult row, LoginInfo info)
+    {
+        var message = string.Join(" ", new[] { row.Message, info.Details }.Where(text => !string.IsNullOrEmpty(text)));
+        return row with
+        {
+            Login = info,
+            Source = info.RecordsUsed && !info.IsApproximate ? ActivitySource.LoginRecords : row.Source,
+            Message = message.Length == 0 ? null : message
+        };
+    }
+
+    private async Task<T> RunWithTimeout<T>(
+        Func<T> work, CancellationToken ct, Action<Task>? onTimeout = null, TimeSpan? timeout = null)
     {
         var task = Task.Run(work, CancellationToken.None);
-        var delay = Task.Delay(_timeout, ct);
+        var delay = Task.Delay(timeout ?? _timeout, ct);
         var done = await Task.WhenAny(task, delay);
         if (done == task) return await task;
         ct.ThrowIfCancellationRequested();

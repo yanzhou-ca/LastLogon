@@ -56,9 +56,12 @@ public class FakeFs : IProfileFileSystem
         finally { Interlocked.Decrement(ref _aclCur); }
     }
 
+    public TimeSpan UseDelay = TimeSpan.Zero;
+
     public ProfileUse GetProfileUse(string c, string u)
     {
         UseChecks.Enqueue($"{c}|{u}");
+        if (UseDelay > TimeSpan.Zero) Thread.Sleep(UseDelay);
         return Use.TryGetValue($"{c}|{u}", out var v) ? v : ProfileUse.Unknown;
     }
 }
