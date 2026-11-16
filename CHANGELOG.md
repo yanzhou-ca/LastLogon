@@ -2,6 +2,23 @@
 
 All notable changes to LastLogon are listed here. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and versions follow [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- **Last login**, **Logged in now** and **Last logout** columns in By computer and By user. They come from the login and logout records in each computer's System and User Profile Service event logs, which Windows writes without an audit policy. A user who is logged in shows for how long, is listed first, and is never marked stale.
+- A user with no login record shows "Before <date>", the date the computer's logs begin, instead of an old time from the profile file.
+- The CSV export and Copy have `LastLogin`, `LoggedInNow`, `LoggedInSince`, `LastLogout` and `RecordsBegin` columns after the old ones. `Source` can now be `LoginRecords`.
+- The status line says how many users are logged in now.
+
+### Changed
+
+- **Last profile activity** is now **Last logout**. For a user who is logged in it used to show the logout before the current session, which looked like their last activity.
+- A row that rests on the time of the profile file, because the login records could not be used, says **Approximate** and gives the reason.
+- By computer and By user need the *Remote Event Log Management* firewall rules on the target computers to show login times. Without them the lookups work as before and say why.
+- To tell who is logged in, the tool briefly opens each profile's `NTUSER.DAT` for reading and reads the access list of each profile folder. It still changes nothing, and it does not open the file of a user whose records say they logged out.
+- The table has no Source column; the Details column says what a row rests on. The window opens wider.
+
 ## [1.1.0] - 2026-11-13
 
 ### Fixed
