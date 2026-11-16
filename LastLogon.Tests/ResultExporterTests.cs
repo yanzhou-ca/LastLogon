@@ -1,3 +1,4 @@
+using System.Globalization;
 using LastLogon.Core;
 using Xunit;
 
@@ -38,6 +39,91 @@ public class ResultExporterTests
     [Fact]
     public void ToTabSeparated_HasHeaderRow()
         => Assert.StartsWith("Computer\tUsername\tLastProfileActivity", ResultExporter.ToTabSeparated(new[] { R(null) }));
+
+    // ---- The login facts
+
+    private static readonly DateTimeOffset Login = TestHistory.T("2026-10-15T16:25:45Z");
+    private static readonly DateTimeOffset Logout = TestHistory.T("2026-10-14T20:46:08Z");
+    private static readonly DateTimeOffset Begin = TestHistory.T("2026-05-12T12:00:00Z");
+
+    private static string Local(DateTimeOffset time, string format)
+        => time.ToLocalTime().ToString(format, CultureInfo.InvariantCulture);
+
+    private static ProfileResult WithLogin(LoginInfo info, ActivitySource? source = ActivitySource.LoginRecords)
+        => new("pc1", "jdoe", null, source, ScanStatus.Ok, null, info);
+
+    [Fact]
+    public void ToCsv_AppendsTheLoginColumnsAfterTheOldOnes()
+        => Assert.Equal(
+            "Computer,Username,LastProfileActivity,DaysAgo,Source,Status,Message,LastLogin,LoggedInNow,LoggedInSince,LastLogout,RecordsBegin",
+            ResultExporter.ToCsv(new[] { R(null) }).Split("\r\n")[0]);
+
+    [Fact]
+    public void ToCsv_WritesTheLoginFactsOfARow()
+    {
+        var row = WithLogin(new LoginInfo(LoggedInState.Yes, Login, Login, Logout, null, Begin, true, ""));
+
+        var cells = ResultExporter.ToCsv(new[] { row }).Split("\r\n")[1].Split(',');
+
+        Assert.Equal(12, cells.Length);
+        Assert.Equal(Local(Login, "yyyy-MM-dd HH:mm"), cells[7]);
+        Assert.Equal("Yes", cells[8]);
+        Assert.Equal(Local(Login, "yyyy-MM-dd HH:mm"), cells[9]);
+        Assert.Equal(Local(Logout, "yyyy-MM-dd HH:mm"), cells[10]);
+        Assert.Equal(Local(Begin, "yyyy-MM-dd"), cells[11]);
+    }
+
+    [Theory]
+    [InlineData(LoggedInState.Yes, "Yes")]
+    [InlineData(LoggedInState.No, "No")]
+    [InlineData(LoggedInState.Unknown, "")]
+    public void ToCsv_WritesLoggedInNowAsYesNoOrNothing(LoggedInState state, string expected)
+    {
+        var row = WithLogin(new LoginInfo(state, null, null, null, null, null, false, ""));
+
+        Assert.Equal(expected, ResultExporter.ToCsv(new[] { row }).Split("\r\n")[1].Split(',')[8]);
+    }
+
+    [Fact]
+    public void ToCsv_LastLogoutIsTheFileTimeWhenTheRowShowsItAsTheLogout()
+    {
+        var file = new DateTime(2025, 3, 2, 9, 40, 0);
+        var row = WithLogin(new LoginInfo(LoggedInState.No, null, null, null, file, null, false, ""), ActivitySource.NtUserDat);
+
+        var cells = ResultExporter.ToCsv(new[] { row }).Split("\r\n")[1].Split(',');
+
+        Assert.Equal("2025-03-02 09:40", cells[10]);
+        Assert.Equal("", cells[7]);
+        Assert.Equal("", cells[11]);
+    }
+
+    [Fact]
+    public void ToCsv_LeavesTheLoginColumnsEmptyForARowWithoutLoginInfo()
+        => Assert.EndsWith("Ok,,,,,,", ResultExporter.ToCsv(new[] { R(null) }).Split("\r\n")[1]);
+
+    [Fact]
+    public void ToCsv_SourceNamesTheLoginRecords()
+    {
+        var row = WithLogin(new LoginInfo(LoggedInState.No, null, Login, Logout, null, Begin, true, ""));
+
+        Assert.Equal("LoginRecords", ResultExporter.ToCsv(new[] { row }).Split("\r\n")[1].Split(',')[4]);
+    }
+
+    [Fact]
+    public void ToTabSeparated_HasTheLoginColumns()
+    {
+        var row = new ProfileResult("pc1", "jdoe", null, ActivitySource.LoginRecords, ScanStatus.Ok, "a message",
+            new LoginInfo(LoggedInState.Yes, Login, Login, Logout, null, Begin, true, ""));
+
+        var lines = ResultExporter.ToTabSeparated(new[] { row }).Split("\r\n");
+
+        Assert.Contains("LoggedInNow", lines[0]);
+        Assert.Contains("LastLogout", lines[0]);
+        var cells = lines[1].Split('\t');
+        Assert.Equal(12, cells.Length);
+        Assert.Equal("a message", cells[6]);
+        Assert.Equal("Yes", cells[8]);
+    }
 
     [Theory]
     [InlineData("=1+1")]

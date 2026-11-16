@@ -6,8 +6,12 @@ namespace LastLogon.Core;
 
 public static class ResultExporter
 {
+    // The seven columns of the first release come first and keep their order. The login facts follow.
     private static readonly string[] Header =
-        { "Computer", "Username", "LastProfileActivity", "DaysAgo", "Source", "Status", "Message" };
+    {
+        "Computer", "Username", "LastProfileActivity", "DaysAgo", "Source", "Status", "Message",
+        "LastLogin", "LoggedInNow", "LoggedInSince", "LastLogout", "RecordsBegin"
+    };
     private static readonly string[] LogonEventHeader =
     {
         "Computer", "LocalTime", "TimeUtc", "EventId", "EventName", "AccountName",
@@ -36,12 +40,28 @@ public static class ResultExporter
                 r.LastActivity?.ToString("yyyy-MM-dd HH:mm") ?? "",
                 r.DaysAgo?.ToString() ?? "",
                 r.Source?.ToString() ?? "",
-                r.Status.ToString(), r.Message ?? ""
+                r.Status.ToString(), r.Message ?? "",
+                Time(r.Login?.LastLogin), LoggedInNow(r.Login), Time(r.Login?.LoggedInSince),
+                r.Login?.LastLogoutText ?? "", DateOnly(r.Login?.RecordsBegin)
             };
             sb.Append(string.Join(sep, cells.Select(esc))).Append("\r\n");
         }
         return sb.ToString();
     }
+
+    // A date column holds a date and nothing else: "before" is the business of the text columns, not of the export.
+    private static string Time(DateTimeOffset? time)
+        => time?.ToLocalTime().ToString("yyyy-MM-dd HH:mm", CultureInfo.InvariantCulture) ?? "";
+
+    private static string DateOnly(DateTimeOffset? time)
+        => time?.ToLocalTime().ToString("yyyy-MM-dd", CultureInfo.InvariantCulture) ?? "";
+
+    private static string LoggedInNow(LoginInfo? login) => login?.LoggedIn switch
+    {
+        LoggedInState.Yes => "Yes",
+        LoggedInState.No => "No",
+        _ => ""
+    };
 
     private static string BuildLogonEvents(
         IEnumerable<LogonEventRecord> rows,
