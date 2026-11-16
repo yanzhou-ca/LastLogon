@@ -244,6 +244,40 @@ public class LoginHistoryReaderTests
         Assert.Equal(T("2026-10-14T20:46:08Z"), Of(history, LoginLog.System).Begins);
     }
 
+    // A read that got nothing before the limit says nothing about the log. Reporting it as a log without records
+    // would tell the operator that the computer does not record logins, which nobody found out.
+    [Fact]
+    public void Read_WhenTheLimitIsReachedBeforeAnyRecordWasRead_TheLogCouldNotBeRead()
+    {
+        var history = new LoginHistoryReader(FakeLogSource.NeverAnswers(), 1000)
+            .Read("pc1", null, TimeSpan.FromMilliseconds(300), CancellationToken.None);
+
+        Assert.False(history.AnyLogRead);
+        Assert.False(history.AnyRecordOfAnyone);
+        Assert.Null(history.RecordsBegin);
+        Assert.All(history.Logs, result =>
+        {
+            Assert.Equal(LoginLogOutcome.Failed, result.Outcome);
+            Assert.Contains("timed out", result.Failure);
+        });
+    }
+
+    [Fact]
+    public void Read_WhenOnlyOneLogGotRecordsBeforeTheLimit_ThatLogTimedOutAndTheOtherCouldNotBeRead()
+    {
+        var source = new FakeLogSource
+        {
+            Records = (log, _, ct) => log == LoginLog.System ? TwoRecordsThenWait(log, ct) : FakeLogSource.NothingUntilCancelled(ct)
+        };
+
+        var history = new LoginHistoryReader(source, 1000).Read("pc1", null, TimeSpan.FromMilliseconds(300), CancellationToken.None);
+
+        Assert.Equal(LoginLogOutcome.TimedOut, Of(history, LoginLog.System).Outcome);
+        Assert.Equal(LoginLogOutcome.Failed, Of(history, LoginLog.UserProfileService).Outcome);
+        Assert.True(history.AnyLogRead);
+        Assert.Equal(2, history.Records.Count);
+    }
+
     [Fact]
     public void Read_UnauthorizedAccess_IsReportedAsNoPermission()
     {
@@ -359,6 +393,16 @@ public class LoginHistoryReaderTests
 internal sealed class FakeLogSource : ILoginLogSource
 {
     private readonly object _gate = new();
+
+    /// <summary>A source whose logs give nothing until the read is cancelled, as a computer that answers too slowly does.</summary>
+    public static FakeLogSource NeverAnswers() => new() { Records = (_, _, ct) => NothingUntilCancelled(ct) };
+
+    public static IEnumerable<string> NothingUntilCancelled(CancellationToken cancellationToken)
+    {
+        cancellationToken.WaitHandle.WaitOne();
+        cancellationToken.ThrowIfCancellationRequested();
+        yield break;
+    }
 
     public Func<LoginLog, string?, CancellationToken, IEnumerable<string>> Records { get; set; } = (_, _, _) => Array.Empty<string>();
 

@@ -11,6 +11,8 @@ public sealed class LoginHistoryReader : ILoginHistorySource
 {
     private const uint RpcServerUnavailable = 0x800706BA;
 
+    private const string TimedOutFailure = "Reading the event log timed out.";
+
     private static readonly LoginLog[] Logs = { LoginLog.System, LoginLog.UserProfileService };
 
     private readonly ILoginLogSource _source;
@@ -87,8 +89,12 @@ public sealed class LoginHistoryReader : ILoginHistorySource
         }
         catch (OperationCanceledException)
         {
-            // Either the scan was cancelled, which Read reports, or the time limit of this read was reached.
-            return new LogRead(new LoginLogResult(log, LoginLogOutcome.TimedOut, OldestOf(records), null), records, false);
+            // Either the scan was cancelled, which Read reports, or the time limit of this read was reached. What was read
+            // before the limit is kept. A read that got nothing says nothing about the log: it is a log that could not be
+            // read, and not one without records, which would tell the operator that the computer does not record logins.
+            return records.Count == 0
+                ? new LogRead(new LoginLogResult(log, LoginLogOutcome.Failed, null, TimedOutFailure), records, false)
+                : new LogRead(new LoginLogResult(log, LoginLogOutcome.TimedOut, OldestOf(records), null), records, false);
         }
         catch (Exception ex)
         {

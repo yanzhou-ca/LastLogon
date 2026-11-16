@@ -605,6 +605,39 @@ public class ProfileScannerLoginTests
         Assert.Equal(LoggedInState.No, row.Login!.LoggedIn);
     }
 
+    // A computer whose event logs answer too slowly: the rows say that the read timed out, never that the logs hold no records.
+    [Fact]
+    public async Task ScanComputer_WhenTheEventLogsAnswerTooSlowly_RowsSayTheReadTimedOut()
+    {
+        var fs = Pc(("jdoe", Jdoe, At("2026-10-14T20:46:08Z")));
+        var scanner = new ProfileScanner(
+            fs, 4, loginHistory: new LoginHistoryReader(FakeLogSource.NeverAnswers()), loginHistoryTimeout: TimeSpan.FromMilliseconds(150));
+
+        var row = Assert.Single(await scanner.ScanComputerAsync("pc1", default));
+
+        Assert.Equal(ScanStatus.Ok, row.Status);
+        Assert.Equal("Approximate", row.ResultText);
+        Assert.Contains("timed out", row.Message);
+        Assert.DoesNotContain(LoginAssessor.NoRecordsAtAll, row.Message);
+    }
+
+    [Fact]
+    public async Task FindUser_WhenTheEventLogsAnswerTooSlowly_TheRowSaysTheReadTimedOut()
+    {
+        var scanner = new ProfileScanner(
+            PcsWithJdoe("pc1"), 4,
+            loginHistory: new LoginHistoryReader(FakeLogSource.NeverAnswers()),
+            resolveUserSid: Resolves(Jdoe),
+            loginHistoryTimeout: TimeSpan.FromMilliseconds(150));
+
+        var row = Assert.Single(await Find(scanner, new[] { "pc1" }));
+
+        Assert.Equal(ScanStatus.Ok, row.Status);
+        Assert.Equal("Approximate", row.ResultText);
+        Assert.Contains("timed out", row.Message);
+        Assert.DoesNotContain(LoginAssessor.NoRecordsAtAll, row.Message);
+    }
+
     // Review focus 4: Esc while the records are being read
     [Fact]
     public async Task ScanComputers_CancelledWhileTheRecordsAreRead_EndsPromptlyWithoutRows()

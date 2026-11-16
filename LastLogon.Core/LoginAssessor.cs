@@ -14,6 +14,9 @@ public static class LoginAssessor
     public const string NoRecordsAtAll =
         "The event logs of this computer hold no login or logout records, so they say nothing about this user.";
 
+    public const string NoRecordsInTheLogThatWasRead =
+        "The event log that could be read holds no login or logout records, so it says nothing about this user.";
+
     public const string Undatable =
         "The event logs hold no login record for this user and the date they begin could not be read, so a missing login cannot be dated.";
 
@@ -151,10 +154,7 @@ public static class LoginAssessor
             sentences.Add(logoutFile is not null ? NoLoginSince : FileNotALogin);
         }
 
-        foreach (var log in history.Logs.Where(result => !result.WasRead))
-        {
-            sentences.Add($"The {LogTitle(log.Log)} log could not be used. {log.Failure}".TrimEnd());
-        }
+        sentences.AddRange(FailedLogSentences(history));
 
         if (history.Logs.Any(log => log.Outcome is LoginLogOutcome.CutShort or LoginLogOutcome.TimedOut))
         {
@@ -166,27 +166,34 @@ public static class LoginAssessor
 
     private static string UnusedDetails(FolderMatch match, LoginHistory history)
     {
-        string reason;
+        var sentences = new List<string>();
         if (!match.IsMatch)
         {
-            reason = match.Reason ?? string.Empty;
+            sentences.Add(match.Reason ?? string.Empty);
         }
         else if (!history.AnyLogRead)
         {
             var failure = history.Logs.Select(log => log.Failure).FirstOrDefault(text => !string.IsNullOrEmpty(text));
-            reason = failure is null ? UnreadableLogs : UnreadableLogs + " " + failure;
-        }
-        else if (!history.AnyRecordOfAnyone)
-        {
-            reason = NoRecordsAtAll;
+            sentences.Add(failure is null ? UnreadableLogs : UnreadableLogs + " " + failure);
         }
         else
         {
-            reason = Undatable;
+            // "The logs hold no records" is only said of logs that were all read. When one could not be read, what is
+            // known is about the other one, and the log that failed is named, because it is part of the reason.
+            sentences.Add(history.AnyRecordOfAnyone
+                ? Undatable
+                : history.Logs.All(log => log.WasRead) ? NoRecordsAtAll : NoRecordsInTheLogThatWasRead);
+            sentences.AddRange(FailedLogSentences(history));
         }
 
-        return (reason + " " + FromTheProfileFile).TrimStart();
+        sentences.Add(FromTheProfileFile);
+        return string.Join(" ", sentences.Where(sentence => sentence.Length > 0));
     }
+
+    private static IEnumerable<string> FailedLogSentences(LoginHistory history)
+        => history.Logs
+            .Where(result => !result.WasRead)
+            .Select(result => $"The {LogTitle(result.Log)} log could not be used. {result.Failure}".TrimEnd());
 
     private static string LogTitle(LoginLog log)
         => log == LoginLog.System ? "System" : "User Profile Service";

@@ -202,6 +202,48 @@ public class LoginAssessorTests
 
     // ---- What the Details say when the records were used
 
+    // One log was read and holds nothing, the other could not be read: that is not "the logs hold no records".
+    [Fact]
+    public void Assess_WhenOneLogCouldNotBeRead_AndTheOtherHoldsNoRecords_DoesNotSayThatTheLogsHoldNone()
+    {
+        var history = new LoginHistory(
+            Array.Empty<LoginRecord>(),
+            new[]
+            {
+                new LoginLogResult(LoginLog.System, LoginLogOutcome.Complete, T("2026-05-12T12:00:00Z"), null),
+                new LoginLogResult(LoginLog.UserProfileService, LoginLogOutcome.Failed, null, "Reading the event log timed out.")
+            },
+            false);
+
+        var info = LoginAssessor.Assess(Match, Folder(new DateTime(2025, 3, 2, 9, 40, 0)), history, () => ProfileUse.NotInUse);
+
+        Assert.False(info.RecordsUsed);
+        Assert.DoesNotContain(LoginAssessor.NoRecordsAtAll, info.Details);
+        Assert.Contains(LoginAssessor.NoRecordsInTheLogThatWasRead, info.Details);
+        Assert.Contains("The User Profile Service log could not be used. Reading the event log timed out.", info.Details);
+        Assert.EndsWith(LoginAssessor.FromTheProfileFile, info.Details);
+    }
+
+    [Fact]
+    public void Assess_WhenALogCouldNotBeRead_TheDetailsNameItEvenWhenTheRecordsCannotBeDated()
+    {
+        // The other log holds a record of someone else, and no log could tell when it begins.
+        var history = new LoginHistory(
+            new[] { OfSomeoneElse() },
+            new[]
+            {
+                new LoginLogResult(LoginLog.System, LoginLogOutcome.Complete, null, null),
+                new LoginLogResult(LoginLog.UserProfileService, LoginLogOutcome.Failed, null, "Reading the event log timed out.")
+            },
+            true);
+
+        var info = LoginAssessor.Assess(Match, Folder(new DateTime(2025, 3, 2, 9, 40, 0)), history, () => ProfileUse.NotInUse);
+
+        Assert.False(info.RecordsUsed);
+        Assert.Contains("cannot be dated", info.Details);
+        Assert.Contains("The User Profile Service log could not be used. Reading the event log timed out.", info.Details);
+    }
+
     [Fact]
     public void Assess_Details_SayWhereTheTimesComeFromAndHowFarTheyGoBack()
     {

@@ -8,7 +8,7 @@ public enum LoginLogOutcome
     /// <summary>The read stopped at the bound on records, so the oldest are missing.</summary>
     CutShort,
 
-    /// <summary>The time limit was reached. What was read before that is kept.</summary>
+    /// <summary>The time limit was reached after some records had been read. What was read is kept. A read that got nothing before the limit is <see cref="Failed"/>.</summary>
     TimedOut,
 
     /// <summary>The log could not be read. None of its records are used.</summary>
