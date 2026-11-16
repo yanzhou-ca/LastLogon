@@ -3,7 +3,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:local="clr-namespace:LastLogon"
         Title="LastLogon" Icon="Assets/LastLogon.ico"
-        Width="940" Height="760" MinWidth="900" MinHeight="480"
+        Width="1100" Height="760" MinWidth="1060" MinHeight="480"
         WindowStartupLocation="CenterScreen"
         FontFamily="Segoe UI" FontSize="13"
         TextOptions.TextFormattingMode="Display"
@@ -131,7 +131,7 @@
                 </ComboBox>
             </Grid>
             <TextBlock x:Name="ProfileNote" Style="{StaticResource Caption}" Margin="0,8,0,0" TextWrapping="Wrap"
-                       Text="Last profile activity is when NTUSER.DAT was last written, normally at logoff. Someone who is still logged on shows their previous logoff." />
+                       Text="Last login and Logged in now come from the login records in each computer's event logs, which go back only as far as the logs do. Last logout is when the user last logged off. A row marked Approximate rests on the time of the profile file, which Windows writes at logoff." />
 
             <StackPanel x:Name="HistoryPanel" Visibility="Collapsed" Margin="0,12,0,0">
                 <Grid>
@@ -203,7 +203,7 @@
                          HorizontalAlignment="Left" TextChanged="StaleBox_TextChanged"
                          LostFocus="StaleBox_LostFocus" PreviewTextInput="StaleBox_PreviewTextInput"
                          AutomationProperties.Name="Mark stale after days"
-                         ToolTip="Rows whose last profile activity is older than this many days are marked stale." />
+                         ToolTip="Rows whose user was last on the computer more than this many days ago are marked stale. A user who is logged in is never marked stale." />
             </StackPanel>
 
             <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Bottom">
@@ -255,8 +255,12 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="Last profile activity" Width="156" DisplayMemberBinding="{Binding LastActivityText}"
-                                            local:Sorting.SortBy="LastActivity" />
+                            <GridViewColumn Header="Last login" Width="128" DisplayMemberBinding="{Binding LastLoginText}"
+                                            local:Sorting.SortBy="LastLoginSort" />
+                            <GridViewColumn Header="Logged in now" Width="132" DisplayMemberBinding="{Binding LoggedInNowText}"
+                                            local:Sorting.SortBy="LoggedInSort" />
+                            <GridViewColumn Header="Last logout" Width="128" DisplayMemberBinding="{Binding LastLogoutText}"
+                                            local:Sorting.SortBy="LastLogoutSort" />
                             <GridViewColumn Header="Days ago" Width="84" local:Sorting.SortBy="DaysAgo"
                                             HeaderContainerStyle="{StaticResource NumericGridHeader}">
                                 <GridViewColumn.CellTemplate>
@@ -265,7 +269,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="Stale" Width="60">
+                            <GridViewColumn Header="Stale" Width="52">
                                 <GridViewColumn.CellTemplate>
                                     <DataTemplate>
                                         <TextBlock Text="Yes"
@@ -273,9 +277,7 @@
                                     </DataTemplate>
                                 </GridViewColumn.CellTemplate>
                             </GridViewColumn>
-                            <GridViewColumn Header="Source" Width="88" DisplayMemberBinding="{Binding SourceText}"
-                                            local:Sorting.SortBy="SourceText" />
-                            <GridViewColumn Header="Result" Width="104" DisplayMemberBinding="{Binding ResultText}"
+                            <GridViewColumn Header="Result" Width="100" DisplayMemberBinding="{Binding ResultText}"
                                             local:Sorting.SortBy="ResultText" />
                             <GridViewColumn Header="Details" Width="200">
                                 <GridViewColumn.CellTemplate>
@@ -290,7 +292,7 @@
                 </ListView>
                 <Border x:Name="EmptyResultsPanel" BorderBrush="{DynamicResource FieldBorderBrush}" BorderThickness="1"
                         Background="{DynamicResource PanelBrush}" IsHitTestVisible="False">
-                    <TextBlock x:Name="EmptyResultsLabel" Text="Run a scan to see profile activity."
+                    <TextBlock x:Name="EmptyResultsLabel" Text="Run a scan to see who used the computer and who is logged in."
                                Foreground="{DynamicResource CaptionBrush}" TextAlignment="Center" TextWrapping="Wrap"
                                HorizontalAlignment="Center" VerticalAlignment="Center" Margin="24" />
                 </Border>

@@ -22,7 +22,9 @@ public partial class ScanWindow : Window
     private INotifyCollectionChanged? _observedResults;
     private const string LocalDateTimeFormat = "yyyy-MM-dd HH:mm";
 
-    private const string StaleBoxHint = "Rows whose last profile activity is older than this many days are marked stale.";
+    private const string StaleBoxHint =
+        "Rows whose user was last on the computer more than this many days ago are marked stale. "
+        + "A user who is logged in is never marked stale.";
 
     // The least room the lists need before they stop being useful: the header and five rows of a
     // profile table, or the events grid with the two panes under it in Logon history. The window
@@ -45,11 +47,14 @@ public partial class ScanWindow : Window
 
         // A computer that answers "access denied" is looked into with a connection test, using
         // the addressing the operator selected, so that the row says which address each name
-        // reaches.
+        // reaches. The login times come from the same event-log connection that Logon history uses,
+        // and By user finds the account of the typed name through the domain of this computer.
         _vm = new MainViewModel(
             new ProfileScanner(
                 new SmbProfileFileSystem(),
-                connectionProbe: computer => ConnectionTest.Run(computer, ComputerTarget.AddressingMode)),
+                connectionProbe: computer => ConnectionTest.Run(computer, ComputerTarget.AddressingMode),
+                loginHistory: new LoginHistoryReader(new WindowsLoginLogSource()),
+                resolveUserSid: WindowsUserSidResolver.ResolveAsync),
             dispatch);
         _historyVm = new LogonHistoryViewModel(
             new LogonEventScanner(new WindowsLogonEventSource()),
@@ -138,12 +143,16 @@ public partial class ScanWindow : Window
         LayoutUpdated += (_, _) => UpdateMinimumHeight();
     }
 
-    /// <summary>A window taller or wider than the screen would hide the status line or the buttons.</summary>
+    /// <summary>
+    /// A window taller or wider than the screen would hide the status line or the buttons. On a screen narrower
+    /// than the table the table scrolls sideways, and the window does not run off the screen.
+    /// </summary>
     private void LimitToWorkArea()
     {
         var area = SystemParameters.WorkArea;
         if (Height > area.Height) Height = area.Height;
         if (Width > area.Width) Width = area.Width;
+        if (MinWidth > area.Width) MinWidth = area.Width;
     }
 
     /// <summary>
@@ -492,8 +501,8 @@ public partial class ScanWindow : Window
             : status.StartsWith("Done.", StringComparison.Ordinal)
                 ? "No profiles found for this scan."
                 : _vm.Mode == LookupMode.ByUser
-                    ? "Press Scan to see which of the computers have a profile for this user."
-                    : "Press Scan to list the user profiles on the computer, newest first.";
+                    ? "Press Scan to see which of the computers have a profile for this user, and whether the user is logged in."
+                    : "Press Scan to list the user profiles on the computer, with who is logged in now.";
     }
 
     private void UpdateHistoryEmptyState()
