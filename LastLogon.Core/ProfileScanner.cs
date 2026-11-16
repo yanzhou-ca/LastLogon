@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.CompilerServices;
 using System.Threading.Channels;
 
@@ -290,7 +291,7 @@ public class ProfileScanner
                 }
             }, ct, task => pending = task);
 
-            var (row, pendingLogin) = await AddLoginForUserAsync(computer, result, sid, ct);
+            var (row, pendingLogin) = await AddLoginForUserAsync(computer, username, result, sid, ct);
             return new ScanOutcome<ProfileResult>(new[] { row }, pendingLogin);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
@@ -307,7 +308,7 @@ public class ProfileScanner
     /// failed, is returned as it is. Like By computer, a step that fails only makes the row fall back.
     /// </summary>
     private async Task<(ProfileResult Row, Task? Pending)> AddLoginForUserAsync(
-        string computer, ProfileResult row, string? sid, CancellationToken ct)
+        string computer, string username, ProfileResult row, string? sid, CancellationToken ct)
     {
         if (_loginHistory is null || row.Status != ScanStatus.Ok)
         {
@@ -315,6 +316,10 @@ public class ProfileScanner
         }
 
         var abandoned = new List<Task>();
+
+        // The check opens a file of the profile, so each profile is asked about once per scan and never retried.
+        var answers = new ConcurrentDictionary<string, ProfileUse>(StringComparer.OrdinalIgnoreCase);
+        ProfileUse Asked(string folderName) => answers.GetOrAdd(folderName, name => UseOf(computer, name));
         try
         {
             var lists = await ReadAccessListsAsync(computer, new[] { row.Username }, ct, abandoned);
@@ -338,7 +343,19 @@ public class ProfileScanner
                 history = LoginHistory.Unavailable("The records were not read.");
             }
 
-            var info = await AssessFolderAsync(computer, match, folder, history, ct, abandoned);
+            // The records show a session that is open, but the profile that was found may not be in use: the user can be
+            // logged in through another folder of the same account (a rebuilt profile), so that one is looked for.
+            if (match.Sid is { } accountSid && HasOpenLogin(history, accountSid))
+            {
+                var other = await FindTheFolderInUseAsync(computer, username, row, accountSid, answers, Asked, ct, abandoned);
+                if (other is not null)
+                {
+                    row = other.Row;
+                    folder = other.Folder;
+                }
+            }
+
+            var info = await AssessFolderAsync(match, folder, history, Asked, ct, abandoned);
             return (ApplyLogin(row, info), PendingOf(abandoned));
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -352,18 +369,114 @@ public class ProfileScanner
     }
 
     private async Task<LoginInfo> AssessFolderAsync(
-        string computer, FolderMatch match, ProfileFolder folder, LoginHistory history, CancellationToken ct, List<Task> abandoned)
+        FolderMatch match,
+        ProfileFolder folder,
+        LoginHistory history,
+        Func<string, ProfileUse> useOf,
+        CancellationToken ct,
+        List<Task> abandoned)
     {
         try
         {
             return await RunWithTimeout(
-                () => LoginAssessor.Assess(match, folder, history, () => UseOf(computer, folder.Name)),
+                () => LoginAssessor.Assess(match, folder, history, () => useOf(folder.Name)),
                 ct,
                 abandoned.Add);
         }
         catch (TimeoutException)
         {
             return LoginAssessor.Assess(match, folder, history, () => ProfileUse.Unknown);
+        }
+    }
+
+    private static bool HasOpenLogin(LoginHistory history, string sid)
+        => LoginRecords.NewestOpenLogin(history.Records.Where(record => SidText.Same(record.Sid, sid))) is not null;
+
+    /// <summary>Another profile folder of the account, which is the one Windows has open.</summary>
+    private sealed record AnotherFolder(ProfileResult Row, ProfileFolder Folder);
+
+    /// <summary>
+    /// For a user whose records show an open login while the profile that was found is not in use: the folder of the same
+    /// account that is, among the folders named after the user with a suffix. Exactly one qualifies, or nothing changes.
+    /// When C:\Users cannot be listed or the step runs out of time, the found profile counts as "cannot tell", so that the
+    /// open login stands on the word of the records instead of being denied by a folder that may be the wrong one.
+    /// </summary>
+    private async Task<AnotherFolder?> FindTheFolderInUseAsync(
+        string computer,
+        string username,
+        ProfileResult found,
+        string sid,
+        ConcurrentDictionary<string, ProfileUse> answers,
+        Func<string, ProfileUse> asked,
+        CancellationToken ct,
+        List<Task> abandoned)
+    {
+        try
+        {
+            return await RunWithTimeout(() =>
+            {
+                if (asked(found.Username) != ProfileUse.NotInUse)
+                {
+                    return null;
+                }
+
+                IReadOnlyList<string> names;
+                try
+                {
+                    names = _fs.ListUserFolders(computer);
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    answers[found.Username] = ProfileUse.Unknown;
+                    return null;
+                }
+
+                var inUse = new List<(string Name, IReadOnlyList<string> List)>();
+                foreach (var name in names)
+                {
+                    if (name.Equals(found.Username, StringComparison.OrdinalIgnoreCase)
+                        || !name.StartsWith(username + ".", StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    IReadOnlyList<string> list;
+                    try
+                    {
+                        list = _fs.GetFolderAccessSids(computer, name);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        continue;
+                    }
+
+                    if (list.Any(entry => SidText.Same(entry, sid)) && asked(name) == ProfileUse.InUse)
+                    {
+                        inUse.Add((name, list));
+                    }
+                }
+
+                if (inUse.Count != 1)
+                {
+                    return null;
+                }
+
+                try
+                {
+                    var (name, list) = inUse[0];
+                    var row = ReadProfile(computer, name);
+                    return new AnotherFolder(row, new ProfileFolder(name, row.LastActivity, row.Source ?? ActivitySource.Folder, list));
+                }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    return null;
+                }
+            }, ct, abandoned.Add);
+        }
+        catch (TimeoutException)
+        {
+            answers[found.Username] = ProfileUse.Unknown;
+            return null;
         }
     }
 

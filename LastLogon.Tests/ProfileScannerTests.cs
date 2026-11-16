@@ -11,11 +11,13 @@ public class FakeFs : IProfileFileSystem
     public Func<string, Exception?>? Fail;
     public Func<string, string, Exception?>? FailNtUser;
     public TimeSpan Delay = TimeSpan.Zero;
-    private int _cur, _peak;
+    private int _cur, _peak, _listCalls;
     public int Peak => _peak;
+    public int ListCalls => _listCalls;
 
     public IReadOnlyList<string> ListUserFolders(string computer)
     {
+        Interlocked.Increment(ref _listCalls);
         var c = Interlocked.Increment(ref _cur);
         int p; while (c > (p = _peak)) Interlocked.CompareExchange(ref _peak, c, p);
         try

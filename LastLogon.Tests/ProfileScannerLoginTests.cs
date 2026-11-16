@@ -470,6 +470,141 @@ public class ProfileScannerLoginTests
         Assert.Equal(ActivitySource.NtUserDat, row.Source);
     }
 
+    // ---- By user: the user is logged in through another folder of the same account
+
+    private static FakeFs RebuiltPc()
+    {
+        var fs = new FakeFs();
+        fs.Folders["pc1"] = new() { "jdoe", "jdoe.CORP" };
+        foreach (var folder in new[] { "jdoe", "jdoe.CORP" })
+        {
+            fs.NtUser[$"pc1|{folder}"] = At("2026-10-14T20:46:08Z");
+            fs.Acl[$"pc1|{folder}"] = Builtin.Append(Jdoe).ToArray();
+        }
+
+        return fs;
+    }
+
+    private static FakeHistory OpenLoginOfJdoe() => HistoryOf(TestHistory.Login(Jdoe, "2026-10-15T16:25:45Z"));
+
+    [Fact]
+    public async Task FindUser_WhenTheFolderFoundIsNotInUseButAnotherFolderOfTheAccountIs_ReportsThatFolder()
+    {
+        var fs = RebuiltPc();
+        fs.Use["pc1|jdoe"] = ProfileUse.NotInUse;
+        fs.Use["pc1|jdoe.CORP"] = ProfileUse.InUse;
+
+        var row = Assert.Single(await Find(UserScanner(fs, OpenLoginOfJdoe(), Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal("jdoe.CORP", row.Username);
+        Assert.Equal(LoggedInState.Yes, row.Login!.LoggedIn);
+        Assert.Equal(TestHistory.T("2026-10-15T16:25:45Z"), row.Login.LoggedInSince);
+        // each profile is asked about once per scan
+        Assert.Equal(new[] { "pc1|jdoe", "pc1|jdoe.CORP" }, fs.UseChecks.OrderBy(check => check, StringComparer.Ordinal));
+    }
+
+    [Fact]
+    public async Task FindUser_WhenNoOtherFolderIsInUse_StaysNotLoggedIn()
+    {
+        var fs = RebuiltPc();
+        fs.Use["pc1|jdoe"] = ProfileUse.NotInUse;
+        fs.Use["pc1|jdoe.CORP"] = ProfileUse.NotInUse;
+
+        var row = Assert.Single(await Find(UserScanner(fs, OpenLoginOfJdoe(), Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal("jdoe", row.Username);
+        Assert.Equal(LoggedInState.No, row.Login!.LoggedIn);
+    }
+
+    [Fact]
+    public async Task FindUser_WhenSeveralOtherFoldersAreInUse_KeepsTheFolderFound()
+    {
+        var fs = RebuiltPc();
+        fs.Folders["pc1"].Add("jdoe.OLD");
+        fs.NtUser["pc1|jdoe.OLD"] = At("2026-09-01T10:00:00Z");
+        fs.Acl["pc1|jdoe.OLD"] = Builtin.Append(Jdoe).ToArray();
+        fs.Use["pc1|jdoe"] = ProfileUse.NotInUse;
+        fs.Use["pc1|jdoe.CORP"] = ProfileUse.InUse;
+        fs.Use["pc1|jdoe.OLD"] = ProfileUse.InUse;
+
+        var row = Assert.Single(await Find(UserScanner(fs, OpenLoginOfJdoe(), Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal("jdoe", row.Username);
+        Assert.Equal(LoggedInState.No, row.Login!.LoggedIn);
+    }
+
+    [Fact]
+    public async Task FindUser_IgnoresAnotherFolderThatDoesNotListTheAccount()
+    {
+        var fs = RebuiltPc();
+        fs.Acl["pc1|jdoe.CORP"] = Builtin.Append(Asmith).ToArray();
+        fs.Use["pc1|jdoe"] = ProfileUse.NotInUse;
+        fs.Use["pc1|jdoe.CORP"] = ProfileUse.InUse;
+
+        var row = Assert.Single(await Find(UserScanner(fs, OpenLoginOfJdoe(), Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal("jdoe", row.Username);
+        Assert.Equal(LoggedInState.No, row.Login!.LoggedIn);
+        Assert.DoesNotContain("pc1|jdoe.CORP", fs.UseChecks);
+    }
+
+    [Fact]
+    public async Task FindUser_WhenTheListingIsRefused_TrustsTheRecords()
+    {
+        var fs = RebuiltPc();
+        fs.Fail = _ => new UnauthorizedAccessException();
+        fs.Use["pc1|jdoe"] = ProfileUse.NotInUse;
+
+        var row = Assert.Single(await Find(UserScanner(fs, OpenLoginOfJdoe(), Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal("jdoe", row.Username);
+        Assert.Equal(LoggedInState.Yes, row.Login!.LoggedIn);
+        Assert.Equal(TestHistory.T("2026-10-15T16:25:45Z"), row.Login.LoggedInSince);
+    }
+
+    [Fact]
+    public async Task FindUser_WhenLookingForAnotherFolderHangs_TrustsTheRecords()
+    {
+        var fs = RebuiltPc();
+        fs.Delay = TimeSpan.FromSeconds(5);
+        fs.Use["pc1|jdoe"] = ProfileUse.NotInUse;
+        var scanner = new ProfileScanner(fs, 4, TimeSpan.FromMilliseconds(200), loginHistory: OpenLoginOfJdoe(), resolveUserSid: Resolves(Jdoe));
+
+        var stopwatch = Stopwatch.StartNew();
+        var row = Assert.Single(await Find(scanner, new[] { "pc1" }));
+
+        Assert.True(stopwatch.Elapsed < TimeSpan.FromSeconds(3));
+        Assert.Equal(ScanStatus.Ok, row.Status);
+        Assert.Equal("jdoe", row.Username);
+        Assert.Equal(LoggedInState.Yes, row.Login!.LoggedIn);
+    }
+
+    [Fact]
+    public async Task FindUser_DoesNotListFolders_WhenTheFolderFoundIsInUse()
+    {
+        var fs = RebuiltPc();
+        fs.Use["pc1|jdoe"] = ProfileUse.InUse;
+
+        var row = Assert.Single(await Find(UserScanner(fs, OpenLoginOfJdoe(), Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal(0, fs.ListCalls);
+        Assert.Equal("jdoe", row.Username);
+        Assert.Equal(LoggedInState.Yes, row.Login!.LoggedIn);
+    }
+
+    [Fact]
+    public async Task FindUser_DoesNotListFolders_WhenTheUserLoggedOut()
+    {
+        var fs = RebuiltPc();
+        var history = HistoryOf(TestHistory.Login(Jdoe, "2026-10-14T08:00:00Z"), TestHistory.Logout(Jdoe, "2026-10-14T20:46:08Z"));
+
+        var row = Assert.Single(await Find(UserScanner(fs, history, Resolves(Jdoe)), new[] { "pc1" }));
+
+        Assert.Equal(0, fs.ListCalls);
+        Assert.Empty(fs.UseChecks);
+        Assert.Equal(LoggedInState.No, row.Login!.LoggedIn);
+    }
+
     // Review focus 4: Esc while the records are being read
     [Fact]
     public async Task ScanComputers_CancelledWhileTheRecordsAreRead_EndsPromptlyWithoutRows()
