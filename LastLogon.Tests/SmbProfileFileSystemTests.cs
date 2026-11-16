@@ -5,6 +5,8 @@ using Xunit;
 
 namespace LastLogon.Tests;
 
+// Changes the static addressing mode and DNS domain of ComputerTarget: see ComputerTargetTests.
+[Collection("ComputerTarget static state")]
 public class SmbProfileFileSystemTests
 {
     [Fact]

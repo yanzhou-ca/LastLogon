@@ -107,6 +107,9 @@ public class InputParserTests
         => Assert.False(InputParser.TryParseStaleDays(text, out _));
 }
 
+// ComputerTarget keeps its addressing mode and DNS domain in static fields. The tests that change them and the tests
+// that read them run one after another, because xUnit runs the test classes in parallel.
+[Collection("ComputerTarget static state")]
 public class ComputerTargetTests
 {
     [Fact]
