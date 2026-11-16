@@ -346,4 +346,200 @@ public class MainViewModelTests
         await vm.ScanAsync();
         Assert.Single(vm.Results);
     }
+
+    // ---- Login times: the order, the status line and the typed name
+
+    private const string Alice = "S-1-5-21-1-2-3-1001";
+    private const string Bob = "S-1-5-21-1-2-3-1002";
+    private static readonly string[] Builtin = { "S-1-5-18", "S-1-5-32-544", "S-1-15-3-65536-1-2-3-4-5-6-7" };
+
+    private static void AddProfile(FakeFs fs, string computer, string folder, DateTime file, string sid, ProfileUse? use = null)
+    {
+        if (!fs.Folders.TryGetValue(computer, out var folders))
+        {
+            fs.Folders[computer] = folders = new();
+        }
+
+        folders.Add(folder);
+        fs.NtUser[$"{computer}|{folder}"] = file;
+        fs.Acl[$"{computer}|{folder}"] = Builtin.Append(sid).ToArray();
+        if (use is { } value)
+        {
+            fs.Use[$"{computer}|{folder}"] = value;
+        }
+    }
+
+    private static LoginHistory AliceLoggedIn() => TestHistory.Of(new[] { TestHistory.Login(Alice, "2026-10-15T16:25:45Z") });
+
+    private static LoginHistory BobLoggedOut()
+        => TestHistory.Of(new[] { TestHistory.Login(Bob, "2026-11-12T08:00:00Z"), TestHistory.Logout(Bob, "2026-11-12T17:00:00Z") });
+
+    private static MainViewModel WithRecords(
+        FakeFs fs, FakeHistory history, Func<string, CancellationToken, Task<string?>>? resolver = null)
+        => new(new ProfileScanner(fs, 4, loginHistory: history, resolveUserSid: resolver));
+
+    // pc1: alice is logged in, with the older file time. pc2: bob logged out, with the newer file time.
+    private static (MainViewModel vm, FakeFs fs) AliceLoggedInAndBobNot()
+    {
+        var fs = new FakeFs();
+        AddProfile(fs, "pc1", "alice", new DateTime(2024, 1, 1), Alice, ProfileUse.InUse);
+        AddProfile(fs, "pc2", "bob", new DateTime(2025, 6, 1), Bob);
+        var history = new FakeHistory { Answer = (computer, _) => computer == "pc1" ? AliceLoggedIn() : BobLoggedOut() };
+        return (WithRecords(fs, history), fs);
+    }
+
+    [Fact]
+    public async Task Scan_ByComputer_PutsALoggedInUserFirstEvenWithAnOlderFileTime()
+    {
+        var (vm, _) = AliceLoggedInAndBobNot();
+        vm.ComputersText = "pc1 pc2";
+
+        await vm.ScanAsync();
+
+        Assert.Equal(new[] { "pc1", "pc2" }, vm.Results.Select(r => r.Computer));
+        Assert.Equal(new[] { "alice", "bob" }, vm.Results.Select(r => r.Username));
+    }
+
+    [Fact]
+    public async Task Scan_ByComputer_SaysHowManyUsersAreLoggedIn()
+    {
+        var (vm, _) = AliceLoggedInAndBobNot();
+        vm.ComputersText = "pc1 pc2";
+
+        await vm.ScanAsync();
+
+        Assert.Equal("Done. 2 results, 1 logged in now.", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Scan_ByComputer_SaysNoneAreLoggedInWhenTheRecordsWereRead()
+    {
+        var fs = new FakeFs();
+        AddProfile(fs, "pc2", "bob", new DateTime(2025, 6, 1), Bob);
+        var vm = WithRecords(fs, new FakeHistory { Answer = (_, _) => BobLoggedOut() });
+        vm.ComputersText = "pc2";
+
+        await vm.ScanAsync();
+
+        Assert.Equal("Done. 1 result, 0 logged in now.", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Scan_ByComputer_LeavesTheStatusAloneWhenThereIsNoLoginInfo()
+    {
+        var (vm, _) = Make();
+        vm.ComputersText = "pc1";
+
+        await vm.ScanAsync();
+
+        Assert.Equal("Done. 2 results.", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Scan_ByComputer_LeavesTheStatusAloneWhenNobodyCouldBeChecked()
+    {
+        var fs = new FakeFs();
+        AddProfile(fs, "pc2", "bob", new DateTime(2025, 6, 1), Bob);
+        var history = new FakeHistory { Answer = (_, _) => LoginHistory.Unavailable("The event log could not be reached.") };
+        var vm = WithRecords(fs, history);
+        vm.ComputersText = "pc2";
+
+        await vm.ScanAsync();
+
+        // the records could not be read and the profile check could not tell: nothing is known about who is logged in
+        Assert.Equal("Done. 1 result.", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Scan_ByUser_SaysOnHowManyComputersTheUserIsLoggedIn()
+    {
+        var fs = new FakeFs();
+        AddProfile(fs, "pc1", "alice", new DateTime(2024, 1, 1), Alice, ProfileUse.InUse);
+        AddProfile(fs, "pc2", "alice", new DateTime(2025, 6, 1), Alice);
+        var history = new FakeHistory
+        {
+            Answer = (computer, _) => computer == "pc1"
+                ? AliceLoggedIn()
+                : TestHistory.Of(new[] { TestHistory.Login(Alice, "2026-11-12T08:00:00Z"), TestHistory.Logout(Alice, "2026-11-12T17:00:00Z") })
+        };
+        var vm = WithRecords(fs, history, (_, _) => Task.FromResult<string?>(Alice));
+        vm.Mode = LookupMode.ByUser;
+        vm.Username = "alice";
+        vm.ComputersText = "pc1 pc2";
+
+        await vm.ScanAsync();
+
+        Assert.Equal(
+            "Done. 2 computers checked: 2 with a profile, 0 without, 0 could not be checked. Logged in now on 1 computer.",
+            vm.StatusText);
+        Assert.Equal("pc1", vm.Results[0].Computer);
+    }
+
+    [Fact]
+    public async Task Scan_Cancelled_KeepsTheLoggedInClause()
+    {
+        var fs = new FakeFs();
+        var computers = Enumerable.Range(0, 30).Select(i => "q" + i).ToList();
+        foreach (var computer in computers)
+        {
+            AddProfile(fs, computer, "alice", new DateTime(2025, 6, 1), Alice, ProfileUse.InUse);
+        }
+
+        var history = new FakeHistory { Delay = TimeSpan.FromMilliseconds(80), Answer = (_, _) => AliceLoggedIn() };
+        var vm = WithRecords(fs, history, (_, _) => Task.FromResult<string?>(Alice));
+        vm.Mode = LookupMode.ByUser;
+        vm.Username = "alice";
+        vm.ComputersText = string.Join(" ", computers);
+
+        var scan = vm.ScanAsync();
+        await Task.Delay(400);
+        vm.Cancel();
+        await scan;
+
+        Assert.InRange(vm.Results.Count, 1, 29);
+        Assert.StartsWith("Cancelled.", vm.StatusText);
+        Assert.EndsWith($"Logged in now on {Plural.Count(vm.Results.Count, "computer")}.", vm.StatusText);
+    }
+
+    [Fact]
+    public async Task Scan_ByUser_PassesTheTypedNameToTheResolver()
+    {
+        var fs = new FakeFs();
+        AddProfile(fs, "pc1", "alice", new DateTime(2025, 6, 1), Alice);
+        var asked = new List<string>();
+        var vm = WithRecords(fs, new FakeHistory { Answer = (_, _) => BobLoggedOut() }, (name, _) =>
+        {
+            asked.Add(name);
+            return Task.FromResult<string?>(Alice);
+        });
+        vm.Mode = LookupMode.ByUser;
+        vm.Username = "CORP\\alice";
+        vm.ComputersText = "pc1";
+
+        await vm.ScanAsync();
+
+        Assert.Equal(new[] { "CORP\\alice" }, asked);
+        Assert.Single(vm.Results);
+    }
+
+    [Fact]
+    public void IsStale_NeverMarksAUserWhoIsLoggedIn()
+    {
+        var (vm, _) = Make();
+        var info = new LoginInfo(LoggedInState.Yes, null, null, null, null, null, false, "");
+        var row = new ProfileResult("c", "u", DateTime.Now.AddDays(-400), ActivitySource.NtUserDat, ScanStatus.Ok, null, info);
+
+        Assert.False(vm.IsStale(row));
+    }
+
+    [Fact]
+    public void IsStale_MarksAUserWhoWasLastSeenLongAgoAndOneWhoseLoginIsOlderThanTheRecords()
+    {
+        var (vm, _) = Make();
+        var loggedOutLongAgo = new LoginInfo(LoggedInState.No, null, null, DateTimeOffset.UtcNow.AddDays(-400), null, null, true, "");
+        var olderThanTheRecords = new LoginInfo(LoggedInState.No, null, null, null, null, DateTimeOffset.UtcNow.AddDays(-185).AddHours(-1), true, "");
+
+        Assert.True(vm.IsStale(new ProfileResult("c", "u", null, ActivitySource.LoginRecords, ScanStatus.Ok, null, loggedOutLongAgo)));
+        Assert.True(vm.IsStale(new ProfileResult("c", "u", null, ActivitySource.LoginRecords, ScanStatus.Ok, null, olderThanTheRecords)));
+    }
 }

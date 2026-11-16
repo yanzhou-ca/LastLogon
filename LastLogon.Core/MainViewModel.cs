@@ -175,7 +175,9 @@ public class MainViewModel : INotifyPropertyChanged
             }
             else
             {
-                await foreach (var r in _scanner.FindUserAsync(user, computers, ct))
+                // The scanner finds the account by what the operator typed, with its domain when one was given,
+                // so that another account with the same name is not mistaken for it.
+                await foreach (var r in _scanner.FindUserAsync(user, computers, ct, Username))
                     Add(r);
             }
             if (generation == _scanGeneration)
@@ -211,13 +213,21 @@ public class MainViewModel : INotifyPropertyChanged
     /// <summary>
     /// The status line at the end of a scan. By user says how many computers were checked and what
     /// was found on them, because a result list alone cannot say whether a computer was looked at.
-    /// The line keeps starting with "Done." or "Cancelled.", which the window relies on.
+    /// The line keeps starting with "Done." or "Cancelled.", which the window relies on. It also says how many users
+    /// are logged in now, when at least one row knows whether its user is; otherwise it says what it always said.
     /// </summary>
     private static string Summarize(
         LookupMode mode, ObservableCollection<ProfileResult> results, int total, bool cancelled)
     {
         var outcome = cancelled ? "Cancelled" : "Done";
-        if (mode == LookupMode.ByComputer) return $"{outcome}. {Plural.Count(results.Count, "result")}.";
+        var loginKnown = results.Any(r => r.Login is { } login && login.LoggedIn != LoggedInState.Unknown);
+        var loggedIn = results.Count(r => r.IsLoggedIn);
+
+        if (mode == LookupMode.ByComputer)
+        {
+            var loggedInText = loginKnown ? $", {loggedIn} logged in now" : "";
+            return $"{outcome}. {Plural.Count(results.Count, "result")}{loggedInText}.";
+        }
 
         var withProfile = results.Count(r => r.Status == ScanStatus.Ok);
         var without = results.Count(r => r.Status == ScanStatus.NoProfile);
@@ -226,8 +236,9 @@ public class MainViewModel : INotifyPropertyChanged
             ? $"{results.Count} of {Plural.Count(total, "computer")}"
             : Plural.Count(results.Count, "computer");
 
-        return $"{outcome}. {checkedText} checked: {withProfile} with a profile, "
-               + $"{without} without, {notChecked} could not be checked.";
+        var line = $"{outcome}. {checkedText} checked: {withProfile} with a profile, "
+                   + $"{without} without, {notChecked} could not be checked.";
+        return loginKnown ? line + $" Logged in now on {Plural.Count(loggedIn, "computer")}." : line;
     }
 
     /// <summary>
@@ -273,12 +284,12 @@ public class MainViewModel : INotifyPropertyChanged
         }
     }
 
-    // Keep newest first as results stream in; failures (no date) sort last.
+    // Keep the display order as results stream in: users who are logged in first, then the newest time, and the rows
+    // without a time (failures) last. A row that compares equal goes after the ones that arrived before it.
     private static void Insert(ObservableCollection<ProfileResult> list, ProfileResult r)
     {
-        var key = r.LastActivity ?? DateTime.MinValue;
         var i = 0;
-        while (i < list.Count && (list[i].LastActivity ?? DateTime.MinValue) >= key) i++;
+        while (i < list.Count && ProfileResult.CompareForDisplay(list[i], r) <= 0) i++;
         list.Insert(i, r);
     }
 
