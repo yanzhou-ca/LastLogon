@@ -68,6 +68,13 @@ public sealed class LoginHistoryReader : ILoginHistorySource
 
             var begins = cutShort ? OldestOf(records) : ReadBegin(computer, log, token);
 
+            // The first record of a log is not always its oldest: a clock that stepped back leaves later records with
+            // earlier times. A log does not begin after a record it holds.
+            if (!cutShort && begins is { } first && OldestOf(records) is { } oldestRead && oldestRead < first)
+            {
+                begins = oldestRead;
+            }
+
             // A user with no record of their own: is it that nobody has any, or that this user has none?
             var someoneHasRecords = false;
             if (sid is not null && records.Count == 0)

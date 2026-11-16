@@ -130,6 +130,25 @@ public class LoginHistoryReaderTests
         Assert.Equal(LoginLogOutcome.Complete, Of(history, LoginLog.System).Outcome);
     }
 
+    // Found on a real PC whose clock once stepped back: a login record is older than the first record of the log.
+    [Fact]
+    public void Read_WhenALoginRecordIsOlderThanTheFirstRecordOfTheLog_TheLogBeginsAtThatRecord()
+    {
+        var source = new FakeLogSource
+        {
+            Records = (log, _, _) => log == LoginLog.System
+                ? SystemRecords((7001, "2026-10-15T16:25:45Z"), (7002, "2026-10-01T18:08:15Z"))
+                : Array.Empty<string>(),
+            Oldest = _ => T("2026-10-01T21:00:44Z")
+        };
+
+        var history = Read(source);
+
+        Assert.Equal(T("2026-10-01T18:08:15Z"), Of(history, LoginLog.System).Begins);
+        Assert.Equal(T("2026-10-01T21:00:44Z"), Of(history, LoginLog.UserProfileService).Begins);
+        Assert.Equal(T("2026-10-01T18:08:15Z"), history.RecordsBegin);
+    }
+
     [Fact]
     public void Read_WithAUser_AsksOnlyForThatUsersRecords()
     {
